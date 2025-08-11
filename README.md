@@ -39,13 +39,13 @@ Set the following environment variables:
 ### Running as MCP Server (STDIO)
 
 ```bash
-uv run project-watch --repository /path/to/repo
+uv run project-watch-mcp-mcp --repository /path/to/repo
 ```
 
 ### Running as HTTP Server
 
 ```bash
-uv run project-watch --repository /path/to/repo --transport http --port 8000
+uv run project-watch-mcp-mcp --repository /path/to/repo --transport http --port 8000
 ```
 
 ## MCP Tools

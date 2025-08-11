@@ -27,28 +27,28 @@ Or install locally from https://neo4j.com/download/
 
 Once published to PyPI:
 ```bash
-uvx project-watch --repository /path/to/your/repo
+uvx project-watch-mcp-mcp --repository /path/to/your/repo
 ```
 
 ### Option 2: Run from Local Package
 
-From the project-watch directory:
+From the project-watch-mcp-mcp directory:
 ```bash
 # Build the package
 uv build
 
 # Run from the built wheel
-uvx --from ./dist/project-watch-0.1.0-py3-none-any.whl project-watch --repository /path/to/repo
+uvx --from ./dist/project-watch-mcp-mcp-0.1.0-py3-none-any.whl project-watch-mcp-mcp --repository /path/to/repo
 ```
 
 ### Option 3: Install Globally with UV
 
 ```bash
-# From the project-watch directory
+# From the project-watch-mcp-mcp directory
 uv pip install .
 
 # Then run from anywhere
-project-watch --repository /path/to/repo
+project-watch-mcp-mcp --repository /path/to/repo
 ```
 
 ## Usage Examples
@@ -57,14 +57,14 @@ project-watch --repository /path/to/repo
 
 Monitor current repository with default settings:
 ```bash
-uvx project-watch --repository .
+uvx project-watch-mcp-mcp --repository .
 ```
 
 ### HTTP Server Mode
 
 Run as an HTTP server for remote access:
 ```bash
-uvx project-watch \
+uvx project-watch-mcp-mcp \
   --repository /path/to/repo \
   --transport http \
   --port 8080
@@ -73,7 +73,7 @@ uvx project-watch \
 ### Custom Neo4j Connection
 
 ```bash
-uvx project-watch \
+uvx project-watch-mcp-mcp \
   --repository /path/to/repo \
   --neo4j-uri bolt://myserver:7687 \
   --neo4j-user myuser \
@@ -84,7 +84,7 @@ uvx project-watch \
 ### Monitor Specific File Types
 
 ```bash
-uvx project-watch \
+uvx project-watch-mcp-mcp \
   --repository /path/to/repo \
   --file-patterns "*.py,*.js,*.ts,*.jsx,*.tsx"
 ```
@@ -100,7 +100,7 @@ export REPOSITORY_PATH=/path/to/repo
 export FILE_PATTERNS="*.py,*.js,*.ts"
 export MCP_TRANSPORT=stdio
 
-uvx project-watch
+uvx project-watch-mcp-mcp
 ```
 
 ## MCP Client Configuration
@@ -112,10 +112,10 @@ Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/
 ```json
 {
   "mcpServers": {
-    "project-watch": {
+    "project-watch-mcp": {
       "command": "uvx",
       "args": [
-        "project-watch",
+        "project-watch-mcp",
         "--repository",
         "/path/to/your/repo",
         "--neo4j-password",
@@ -189,12 +189,12 @@ If files aren't being detected:
 
 ## Development & Contributing
 
-To develop or modify project-watch:
+To develop or modify project-watch-mcp-mcp:
 
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd project-watch
+cd project-watch-mcp-mcp
 
 # Install in development mode
 uv sync
@@ -216,16 +216,16 @@ Create a shell script in your project:
 
 ```bash
 #!/bin/bash
-# run-project-watch.sh
+# run-project-watch-mcp-mcp.sh
 
-uvx --from /path/to/project-watch/dist/project-watch-0.1.0-py3-none-any.whl \
-  project-watch \
+uvx --from /path/to/project-watch-mcp-mcp/dist/project-watch-mcp-mcp-0.1.0-py3-none-any.whl \
+  project-watch-mcp-mcp \
   --repository "$(pwd)" \
   --neo4j-password "$NEO4J_PASSWORD" \
   "$@"
 ```
 
-Then run: `./run-project-watch.sh`
+Then run: `./run-project-watch-mcp-mcp.sh`
 
 ### Docker Compose Setup
 
@@ -251,7 +251,7 @@ volumes:
 Then:
 ```bash
 docker-compose up -d
-uvx project-watch --repository . --neo4j-password password
+uvx project-watch-mcp-mcp --repository . --neo4j-password password
 ```
 
 ## License

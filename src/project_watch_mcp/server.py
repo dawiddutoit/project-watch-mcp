@@ -32,7 +32,7 @@ def create_mcp_server(
         FastMCP server instance
     """
     mcp = FastMCP(
-        "project-watch", dependencies=["neo4j", "watchfiles", "pydantic"]
+        "project-watch-mcp", dependencies=["neo4j", "watchfiles", "pydantic"]
     )
 
     @mcp.tool(

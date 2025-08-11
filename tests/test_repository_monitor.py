@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from src.project-watch.repository_monitor import (
+from src.project-watch-mcp.repository_monitor import (
     FileChangeType,
     RepositoryMonitor,
 )

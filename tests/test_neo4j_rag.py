@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from src.project-watch.neo4j_rag import (
+from src.project-watch-mcp.neo4j_rag import (
     CodeFile,
     Neo4jRAG,
 )

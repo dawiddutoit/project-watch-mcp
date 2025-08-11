@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Python project named "project-watch" that requires Python 3.11 or higher. The project is currently in early development stage (v0.1.0) with minimal structure.
+This is a Python project named "project-watch-mcp" that requires Python 3.11 or higher. The project is currently in early development stage (v0.1.0) with minimal structure.
 
 ## Development Setup
 

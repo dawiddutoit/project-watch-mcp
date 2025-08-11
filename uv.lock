@@ -790,7 +790,7 @@ wheels = [
 ]
 
 [[package]]
-name = "project-watch"
+name = "project-watch-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

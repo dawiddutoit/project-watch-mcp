@@ -118,27 +118,27 @@ async def main(
 def cli():
     """Command-line interface for Project Watch."""
     parser = argparse.ArgumentParser(
-        prog="project-watch",
+        prog="project-watch-mcp",
         description="Project Watch - Repository Monitoring MCP Server with Neo4j RAG",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Run with default settings (requires Neo4j running locally)
-  project-watch --repository /path/to/repo
+  project-watch-mcp --repository /path/to/repo
   
   # Run with custom Neo4j connection
-  project-watch --repository /path/to/repo --neo4j-uri bolt://myserver:7687 --neo4j-password mypassword
+  project-watch-mcp --repository /path/to/repo --neo4j-uri bolt://myserver:7687 --neo4j-password mypassword
   
   # Run as HTTP server
-  project-watch --repository /path/to/repo --transport http --port 8080
+  project-watch-mcp --repository /path/to/repo --transport http --port 8080
   
   # Monitor specific file types only
-  project-watch --repository /path/to/repo --file-patterns "*.py,*.js,*.ts"
+  project-watch-mcp --repository /path/to/repo --file-patterns "*.py,*.js,*.ts"
   
   # Using environment variables
   export NEO4J_URI=bolt://localhost:7687
   export NEO4J_PASSWORD=mypassword
-  project-watch --repository /path/to/repo
+  project-watch-mcp --repository /path/to/repo
 
 Docker Neo4j Quick Start:
   docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j

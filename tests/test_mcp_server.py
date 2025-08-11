@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.project-watch.server import create_mcp_server
+from src.project-watch-mcp.server import create_mcp_server
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ class TestMCPServer:
     def test_server_creation(self, mcp_server):
         """Test that MCP server is created correctly."""
         assert mcp_server is not None
-        assert mcp_server.name == "project-watch"
+        assert mcp_server.name == "project-watch-mcp"
 
     async def test_has_initialize_repository_tool(self, mcp_server):
         """Test that initialize_repository tool is registered."""
