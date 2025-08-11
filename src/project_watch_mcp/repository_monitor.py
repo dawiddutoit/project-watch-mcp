@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 
 from neo4j import AsyncDriver
+from pathspec import PathSpec
+from pathspec.patterns import GitWildMatchPattern
 from watchfiles import Change, awatch
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,7 @@ class RepositoryMonitor:
         neo4j_driver: AsyncDriver,
         file_patterns: list[str] | None = None,
         ignore_patterns: list[str] | None = None,
+        use_gitignore: bool = True,
     ):
         """
         Initialize the repository monitor.
@@ -104,12 +107,16 @@ class RepositoryMonitor:
             repo_path: Path to the repository to monitor
             neo4j_driver: Neo4j driver for database connection
             file_patterns: List of file patterns to include (e.g., ["*.py", "*.js"])
-            ignore_patterns: List of patterns to ignore
+            ignore_patterns: List of patterns to ignore (in addition to .gitignore)
+            use_gitignore: Whether to use the project's .gitignore file
         """
         self.repo_path = Path(repo_path).resolve()
         self.neo4j_driver = neo4j_driver
         self.file_patterns = file_patterns or ["*"]
-        self.ignore_patterns = ignore_patterns or [
+        self.use_gitignore = use_gitignore
+
+        # Default ignore patterns (used if no .gitignore or as fallback)
+        default_ignore_patterns = [
             ".*",  # Hidden files
             "__pycache__",
             "*.pyc",
@@ -123,13 +130,74 @@ class RepositoryMonitor:
             "*.egg-info",
         ]
 
+        # Load gitignore patterns if available
+        self.gitignore_spec = self._load_gitignore() if use_gitignore else None
+
+        # Combine user-provided patterns with defaults if no gitignore
+        if not self.gitignore_spec:
+            self.ignore_patterns = ignore_patterns or default_ignore_patterns
+        else:
+            # If gitignore is loaded, only use additional user patterns
+            self.ignore_patterns = ignore_patterns or []
+
         self.is_running = False
         self._watch_task: asyncio.Task | None = None
         self._change_queue: asyncio.Queue[FileChangeEvent] = asyncio.Queue()
 
+    def _load_gitignore(self) -> PathSpec | None:
+        """Load patterns from .gitignore file if it exists."""
+        gitignore_path = self.repo_path / ".gitignore"
+
+        if not gitignore_path.exists():
+            logger.debug(f"No .gitignore file found at {gitignore_path}")
+            return None
+
+        try:
+            with gitignore_path.open("r", encoding="utf-8") as f:
+                patterns = f.read().splitlines()
+
+            # Filter out empty lines and comments
+            patterns = [
+                line.strip()
+                for line in patterns
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+            if not patterns:
+                logger.debug(".gitignore file is empty or contains only comments")
+                return None
+
+            # Create PathSpec with GitWildMatchPattern for proper gitignore behavior
+            spec = PathSpec.from_lines(GitWildMatchPattern, patterns)
+            logger.info(f"Loaded {len(patterns)} patterns from .gitignore")
+            return spec
+
+        except Exception as e:
+            logger.warning(f"Failed to load .gitignore: {e}")
+            return None
+
+    def reload_gitignore(self) -> None:
+        """Reload .gitignore patterns (useful if .gitignore has changed)."""
+        if self.use_gitignore:
+            self.gitignore_spec = self._load_gitignore()
+            logger.info("Reloaded .gitignore patterns")
+
     def _should_include_file(self, file_path: Path) -> bool:
         """Check if a file should be included based on patterns."""
-        # Check ignore patterns first
+        # Get relative path from repo root for gitignore matching
+        try:
+            relative_path = file_path.relative_to(self.repo_path)
+        except ValueError:
+            # File is outside repo path
+            return False
+
+        # Check gitignore patterns first if available
+        if self.gitignore_spec:
+            # PathSpec.match_file expects a string path relative to the gitignore location
+            if self.gitignore_spec.match_file(str(relative_path)):
+                return False
+
+        # Check additional ignore patterns
         for pattern in self.ignore_patterns:
             if fnmatch.fnmatch(file_path.name, pattern):
                 return False

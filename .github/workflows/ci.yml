@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+      
+      - name: Run black formatter check
+        run: uv run black --check src/ tests/
+      
+      - name: Run ruff linter
+        run: uv run ruff check src/ tests/
+      
+      - name: Run pyright type checker
+        run: uv run pyright src/
+      
+      - name: Run tests with coverage
+        run: uv run pytest tests/ --cov=src/project_watch_mcp --cov-report=term-missing --cov-fail-under=60
+      
+      - name: Upload coverage reports
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: htmlcov/
+
+  build-alpha:
+    name: Build Alpha Version
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      
+      - name: Set up Python
+        run: uv python install 3.11
+      
+      - name: Set alpha version
+        run: |
+          # Get current version from pyproject.toml
+          CURRENT_VERSION=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
+          # Create alpha version with PR number and short SHA
+          ALPHA_VERSION="${CURRENT_VERSION}-alpha.pr${{ github.event.pull_request.number }}.$(git rev-parse --short HEAD)"
+          echo "ALPHA_VERSION=$ALPHA_VERSION" >> $GITHUB_ENV
+          # Update version in pyproject.toml
+          sed -i "s/^version = .*/version = \"$ALPHA_VERSION\"/" pyproject.toml
+          echo "Building alpha version: $ALPHA_VERSION"
+      
+      - name: Build package
+        run: uv build
+      
+      - name: Upload alpha build
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-build-pr${{ github.event.pull_request.number }}
+          path: dist/
+      
+      - name: Comment PR with build info
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const version = process.env.ALPHA_VERSION;
+            const body = `## 📦 Alpha Build Ready\n\n` +
+              `Version: \`${version}\`\n\n` +
+              `This alpha build has passed all tests and linting checks. ` +
+              `Download the build artifacts from the workflow run to test locally.\n\n` +
+              `To install locally:\n` +
+              `\`\`\`bash\n` +
+              `pip install dist/project_watch_mcp-${version}-py3-none-any.whl\n` +
+              `\`\`\``;
+            
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Alpha Build Ready')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
