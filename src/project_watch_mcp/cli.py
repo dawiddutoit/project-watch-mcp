@@ -9,9 +9,11 @@ from typing import Literal
 
 from neo4j import AsyncGraphDatabase
 
+from .config import EmbeddingConfig, ProjectConfig
 from .neo4j_rag import Neo4jRAG
 from .repository_monitor import RepositoryMonitor
 from .server import create_mcp_server
+from .utils.embedding import create_embeddings_provider
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +28,7 @@ async def main(
     neo4j_password: str,
     neo4j_database: str,
     repository_path: str,
+    project_name: str | None = None,
     transport: Literal["stdio", "sse", "http"] = "stdio",
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -41,6 +44,7 @@ async def main(
         neo4j_password: Neo4j password
         neo4j_database: Neo4j database name
         repository_path: Path to repository to monitor
+        project_name: Optional project name for context isolation
         transport: Transport type (stdio, sse, http)
         host: HTTP/SSE server host
         port: HTTP/SSE server port
@@ -66,30 +70,57 @@ async def main(
     except Exception as e:
         logger.error(f"Failed to connect to Neo4j: {e}")
         logger.error("Make sure Neo4j is running and accessible")
-        logger.error("You can start Neo4j with Docker: docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j")
+        logger.error(
+            "You can start Neo4j with Neo4j Desktop (recommended) or Docker: docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j"
+        )
         exit(1)
 
-    # Create repository monitor
+    # Create project configuration
+    if project_name:
+        project_config = ProjectConfig(name=project_name, repository_path=Path(repository_path))
+    else:
+        project_config = ProjectConfig.from_repository_path(Path(repository_path))
+    logger.info(f"Project name: {project_config.name}")
+
+    # Create repository monitor with project context
     repository_monitor = RepositoryMonitor(
         repo_path=Path(repository_path),
+        project_name=project_config.name,
         neo4j_driver=neo4j_driver,
         file_patterns=patterns,
     )
     logger.info("Repository monitor created")
 
-    # Create Neo4j RAG system
+    # Create embeddings configuration from environment
+    embedding_config = EmbeddingConfig.from_env()
+
+    # Create embeddings provider
+    embeddings = create_embeddings_provider(
+        provider_type=embedding_config.provider,
+        api_key=embedding_config.openai_api_key,
+        model=embedding_config.openai_model,
+        api_url=embedding_config.local_api_url,
+        dimension=embedding_config.dimension,
+    )
+
+    logger.info(f"Using {embedding_config.provider} embeddings provider")
+
+    # Create Neo4j RAG system with project context
     neo4j_rag = Neo4jRAG(
         neo4j_driver=neo4j_driver,
+        project_name=project_config.name,
+        embeddings=embeddings,
         chunk_size=100,  # Lines per chunk
         chunk_overlap=20,  # Overlapping lines
     )
     await neo4j_rag.initialize()
     logger.info("Neo4j RAG system initialized")
 
-    # Create MCP server
+    # Create MCP server with project context
     mcp = create_mcp_server(
         repository_monitor=repository_monitor,
         neo4j_rag=neo4j_rag,
+        project_name=project_config.name,
     )
     logger.info("MCP server created")
 
@@ -125,24 +156,40 @@ def cli():
 Examples:
   # Run with default settings (requires Neo4j running locally)
   project-watch-mcp --repository /path/to/repo
-  
+
   # Run with custom Neo4j connection
   project-watch-mcp --repository /path/to/repo --neo4j-uri bolt://myserver:7687 --neo4j-password mypassword
-  
+
   # Run as HTTP server
   project-watch-mcp --repository /path/to/repo --transport http --port 8080
-  
+
   # Monitor specific file types only
   project-watch-mcp --repository /path/to/repo --file-patterns "*.py,*.js,*.ts"
-  
+
   # Using environment variables
   export NEO4J_URI=bolt://localhost:7687
   export NEO4J_PASSWORD=mypassword
   project-watch-mcp --repository /path/to/repo
 
-Docker Neo4j Quick Start:
-  docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j
-        """
+Neo4j Quick Start:
+  Option 1 - Neo4j Desktop (recommended): Download from https://neo4j.com/download/
+  Option 2 - Docker: docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j
+
+Embedding Provider Configuration:
+  Set EMBEDDING_PROVIDER environment variable to one of: openai, local, mock
+
+  For OpenAI:
+    export EMBEDDING_PROVIDER=openai
+    export OPENAI_API_KEY=your-api-key
+    export OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # optional
+
+  For Local API:
+    export EMBEDDING_PROVIDER=local
+    export LOCAL_EMBEDDING_API_URL=http://localhost:8080/embeddings
+
+  For Mock (default):
+    export EMBEDDING_PROVIDER=mock
+        """,
     )
 
     # Neo4j connection arguments
@@ -173,6 +220,11 @@ Docker Neo4j Quick Start:
         "-r",
         default=None,
         help="Path to repository to monitor (required)",
+    )
+    parser.add_argument(
+        "--project-name",
+        default=None,
+        help="Project name for context isolation (default: generated from repository path)",
     )
     parser.add_argument(
         "--file-patterns",
@@ -230,6 +282,8 @@ Docker Neo4j Quick Start:
     if not repository_path:
         parser.error("--repository is required (or set REPOSITORY_PATH environment variable)")
 
+    project_name = args.project_name or os.getenv("PROJECT_NAME")
+
     # Validate repository path
     repo_path = Path(repository_path)
     if not repo_path.exists():
@@ -255,6 +309,7 @@ Docker Neo4j Quick Start:
                 neo4j_password=neo4j_password,
                 neo4j_database=neo4j_database,
                 repository_path=str(repo_path.absolute()),
+                project_name=project_name,
                 transport=transport,
                 host=host,
                 port=port,

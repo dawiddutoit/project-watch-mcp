@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from src.project-watch-mcp.repository_monitor import (
+from src.project_watch_mcp.repository_monitor import (
     FileChangeType,
     RepositoryMonitor,
 )
@@ -36,6 +36,7 @@ async def repository_monitor(temp_repo, mock_neo4j_driver):
     """Create a RepositoryMonitor instance for testing."""
     monitor = RepositoryMonitor(
         repo_path=temp_repo,
+        project_name="test_project",
         neo4j_driver=mock_neo4j_driver,
         file_patterns=["*.py", "*.md", "*.json"],
     )
@@ -50,6 +51,7 @@ class TestRepositoryMonitor:
         """Test that RepositoryMonitor initializes correctly."""
         # Compare resolved paths to handle /private symlink on macOS
         assert repository_monitor.repo_path.resolve() == temp_repo.resolve()
+        assert repository_monitor.project_name == "test_project"
         assert repository_monitor.file_patterns == ["*.py", "*.md", "*.json"]
         assert repository_monitor.is_running is False
 

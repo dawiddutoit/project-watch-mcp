@@ -12,6 +12,11 @@ from typing import Any
 
 from neo4j import AsyncDriver, RoutingControl
 
+from .utils.embedding import (
+    EmbeddingsProvider,
+    MockEmbeddingsProvider,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,6 +24,7 @@ logger = logging.getLogger(__name__)
 class CodeFile:
     """Represents a code file to be indexed."""
 
+    project_name: str
     path: Path
     content: str
     language: str
@@ -35,6 +41,7 @@ class CodeFile:
 class CodeChunk:
     """Represents a chunk of code."""
 
+    project_name: str
     file_path: Path
     content: str
     start_line: int
@@ -46,25 +53,12 @@ class CodeChunk:
 class SearchResult:
     """Represents a search result."""
 
+    project_name: str
     file_path: Path
     content: str
     line_number: int
     similarity: float
     context: str | None = None
-
-
-class EmbeddingsProvider:
-    """Mock embeddings provider interface."""
-
-    async def embed_text(self, text: str) -> list[float]:
-        """Generate embedding for text."""
-        # Mock implementation - in production, use real embeddings
-        # (e.g., OpenAI, Sentence Transformers, etc.)
-        return [0.1] * 384  # Mock 384-dimensional embedding
-
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for multiple texts."""
-        return [await self.embed_text(text) for text in texts]
 
 
 class Neo4jRAG:
@@ -73,6 +67,7 @@ class Neo4jRAG:
     def __init__(
         self,
         neo4j_driver: AsyncDriver,
+        project_name: str,
         embeddings: EmbeddingsProvider | None = None,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
@@ -82,12 +77,14 @@ class Neo4jRAG:
 
         Args:
             neo4j_driver: Neo4j driver for database connection
+            project_name: Name of the project for context isolation
             embeddings: Embeddings provider (defaults to mock)
             chunk_size: Size of code chunks in lines
             chunk_overlap: Overlap between chunks in lines
         """
         self.neo4j_driver = neo4j_driver
-        self.embeddings = embeddings or EmbeddingsProvider()
+        self.project_name = project_name
+        self.embeddings = embeddings or MockEmbeddingsProvider()
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
@@ -96,17 +93,30 @@ class Neo4jRAG:
         await self.create_indexes()
 
     async def create_indexes(self):
-        """Create Neo4j indexes for efficient querying."""
+        """Create Neo4j indexes for efficient querying with project isolation."""
         queries = [
-            # Create index for file paths
+            # Composite indexes for project isolation
             """
-            CREATE INDEX file_path_index IF NOT EXISTS
-            FOR (f:CodeFile) ON (f.path)
+            CREATE INDEX project_file_path_index IF NOT EXISTS
+            FOR (f:CodeFile) ON (f.project_name, f.path)
             """,
-            # Create index for languages
             """
-            CREATE INDEX file_language_index IF NOT EXISTS
-            FOR (f:CodeFile) ON (f.language)
+            CREATE INDEX project_name_index IF NOT EXISTS
+            FOR (f:CodeFile) ON (f.project_name)
+            """,
+            # Create index for languages with project
+            """
+            CREATE INDEX project_language_index IF NOT EXISTS
+            FOR (f:CodeFile) ON (f.project_name, f.language)
+            """,
+            # Create composite index for chunks
+            """
+            CREATE INDEX chunk_project_path_index IF NOT EXISTS
+            FOR (c:CodeChunk) ON (c.project_name, c.file_path)
+            """,
+            """
+            CREATE INDEX chunk_project_index IF NOT EXISTS
+            FOR (c:CodeChunk) ON (c.project_name)
             """,
             # Create fulltext index for code search
             """
@@ -122,19 +132,24 @@ class Neo4jRAG:
             except Exception as e:
                 # Index might already exist or syntax not supported
                 logger.debug(f"Index creation: {e}")
-        
+
         # Try to create vector index if Neo4j version supports it
         try:
-            vector_query = """
+            # Get embedding dimension from provider
+            embedding_dim = self.embeddings.dimension
+
+            vector_query = f"""
             CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS
             FOR (c:CodeChunk) ON (c.embedding)
-            OPTIONS {indexConfig: {
-                `vector.dimensions`: 384,
+            OPTIONS {{indexConfig: {{
+                `vector.dimensions`: {embedding_dim},
                 `vector.similarity_function`: 'cosine'
-            }}
+            }}}}
             """
-            await self.neo4j_driver.execute_query(vector_query, routing_control=RoutingControl.WRITE)
-            logger.info("Created vector index for semantic search")
+            await self.neo4j_driver.execute_query(
+                vector_query, routing_control=RoutingControl.WRITE
+            )
+            logger.info(f"Created vector index for semantic search with {embedding_dim} dimensions")
         except Exception as e:
             logger.warning(f"Vector index not supported in this Neo4j version: {e}")
             logger.info("Semantic search will use fallback cosine similarity calculation")
@@ -167,14 +182,25 @@ class Neo4jRAG:
 
     async def index_file(self, code_file: CodeFile):
         """
-        Index a code file in Neo4j.
+        Index a code file in Neo4j with project context.
 
         Args:
             code_file: CodeFile object to index
         """
-        # Create or update file node
+        # Ensure the code_file has the correct project name
+        if code_file.project_name != self.project_name:
+            code_file = CodeFile(
+                project_name=self.project_name,
+                path=code_file.path,
+                content=code_file.content,
+                language=code_file.language,
+                size=code_file.size,
+                last_modified=code_file.last_modified,
+            )
+
+        # Create or update file node with project context
         file_query = """
-        MERGE (f:CodeFile {path: $path})
+        MERGE (f:CodeFile {project_name: $project_name, path: $path})
         SET f.language = $language,
             f.size = $size,
             f.last_modified = $last_modified,
@@ -185,6 +211,7 @@ class Neo4jRAG:
         file_result = await self.neo4j_driver.execute_query(
             file_query,
             {
+                "project_name": self.project_name,
                 "path": str(code_file.path),
                 "language": code_file.language,
                 "size": code_file.size,
@@ -194,14 +221,16 @@ class Neo4jRAG:
             routing_control=RoutingControl.WRITE,
         )
 
-        # Delete existing chunks for this file
+        # Delete existing chunks for this file IN THIS PROJECT ONLY
         delete_chunks_query = """
-        MATCH (f:CodeFile {path: $path})-[:HAS_CHUNK]->(c:CodeChunk)
+        MATCH (f:CodeFile {project_name: $project_name, path: $path})-[:HAS_CHUNK]->(c:CodeChunk)
         DETACH DELETE c
         """
 
         await self.neo4j_driver.execute_query(
-            delete_chunks_query, {"path": str(code_file.path)}, routing_control=RoutingControl.WRITE
+            delete_chunks_query,
+            {"project_name": self.project_name, "path": str(code_file.path)},
+            routing_control=RoutingControl.WRITE,
         )
 
         # Create chunks and index them
@@ -218,10 +247,12 @@ class Neo4jRAG:
             # Generate embedding for chunk
             embedding = await self.embeddings.embed_text(chunk)
 
-            # Create chunk node
+            # Create chunk node with project context
             chunk_query = """
-            MATCH (f:CodeFile {path: $file_path})
+            MATCH (f:CodeFile {project_name: $project_name, path: $file_path})
             CREATE (c:CodeChunk {
+                project_name: $project_name,
+                file_path: $file_path,
                 content: $content,
                 start_line: $start_line,
                 end_line: $end_line,
@@ -234,6 +265,7 @@ class Neo4jRAG:
             await self.neo4j_driver.execute_query(
                 chunk_query,
                 {
+                    "project_name": self.project_name,
                     "file_path": str(code_file.path),
                     "content": chunk,
                     "start_line": start_line,
@@ -249,15 +281,17 @@ class Neo4jRAG:
         logger.info(f"Indexed file {code_file.path} with {len(chunks)} chunks")
 
     async def update_file(self, code_file: CodeFile):
-        """Update an existing file in the graph."""
-        # Check if file hash has changed
+        """Update an existing file in the graph with project context."""
+        # Check if file hash has changed for this project
         check_query = """
-        MATCH (f:CodeFile {path: $path})
+        MATCH (f:CodeFile {project_name: $project_name, path: $path})
         RETURN f.hash as hash
         """
 
         result = await self.neo4j_driver.execute_query(
-            check_query, {"path": str(code_file.path)}, routing_control=RoutingControl.READ
+            check_query,
+            {"project_name": self.project_name, "path": str(code_file.path)},
+            routing_control=RoutingControl.READ,
         )
 
         if result.records:
@@ -271,22 +305,24 @@ class Neo4jRAG:
 
     async def delete_file(self, file_path: Path):
         """
-        Delete a file and its chunks from the graph.
+        Delete a file and its chunks from the graph for this project only.
 
         Args:
             file_path: Path of the file to delete
         """
         query = """
-        MATCH (f:CodeFile {path: $path})
+        MATCH (f:CodeFile {project_name: $project_name, path: $path})
         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:CodeChunk)
         DETACH DELETE f, c
         """
 
         await self.neo4j_driver.execute_query(
-            query, {"path": str(file_path)}, routing_control=RoutingControl.WRITE
+            query,
+            {"project_name": self.project_name, "path": str(file_path)},
+            routing_control=RoutingControl.WRITE,
         )
 
-        logger.info(f"Deleted file {file_path} from graph")
+        logger.info(f"Deleted file {file_path} from project {self.project_name}")
 
     async def search_semantic(
         self,
@@ -295,7 +331,7 @@ class Neo4jRAG:
         language: str | None = None,
     ) -> list[SearchResult]:
         """
-        Perform semantic search using embeddings.
+        Perform semantic search using embeddings with project context.
 
         Args:
             query: Search query
@@ -314,40 +350,44 @@ class Neo4jRAG:
             CALL db.index.vector.queryNodes('chunk_embeddings', $k, $query_embedding)
             YIELD node as c, score
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c)
+            WHERE c.project_name = $project_name
             """
             if language:
-                cypher += " WHERE f.language = $language"
-            
+                cypher += " AND f.language = $language"
+
             cypher += """
             RETURN f.path as file_path,
                    c.content as chunk_content,
                    c.start_line as line_number,
-                   score as similarity
+                   score as similarity,
+                   c.project_name as project_name
             ORDER BY score DESC
             """
-            
+
             params = {
+                "project_name": self.project_name,
                 "query_embedding": query_embedding,
-                "k": limit,
+                "k": limit * 3,  # Get more results initially to filter by project
             }
             if language:
                 params["language"] = language
-            
+
             result = await self.neo4j_driver.execute_query(
                 cypher, params, routing_control=RoutingControl.READ
             )
-            
+
         except Exception as e:
             logger.debug(f"Vector index search failed, using fallback: {e}")
-            
+
             # Fallback: Calculate cosine similarity manually
             cypher = """
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c:CodeChunk)
+            WHERE c.project_name = $project_name
             """
-            
+
             if language:
-                cypher += " WHERE f.language = $language"
-            
+                cypher += " AND f.language = $language"
+
             # Manual cosine similarity calculation
             cypher += """
             WITH f, c,
@@ -365,18 +405,20 @@ class Neo4jRAG:
             RETURN f.path as file_path,
                    c.content as chunk_content,
                    c.start_line as line_number,
-                   similarity
+                   similarity,
+                   c.project_name as project_name
             ORDER BY similarity DESC
             LIMIT $limit
             """
-            
+
             params = {
+                "project_name": self.project_name,
                 "query_embedding": query_embedding,
                 "limit": limit,
             }
             if language:
                 params["language"] = language
-            
+
             result = await self.neo4j_driver.execute_query(
                 cypher, params, routing_control=RoutingControl.READ
             )
@@ -385,6 +427,7 @@ class Neo4jRAG:
         for record in result.records:
             search_results.append(
                 SearchResult(
+                    project_name=record.get("project_name", self.project_name),
                     file_path=Path(record["file_path"]),
                     content=record["chunk_content"],
                     line_number=record["line_number"],
@@ -401,7 +444,7 @@ class Neo4jRAG:
         limit: int = 10,
     ) -> list[SearchResult]:
         """
-        Search for code by pattern or regex.
+        Search for code by pattern or regex with project context.
 
         Args:
             pattern: Search pattern
@@ -415,10 +458,11 @@ class Neo4jRAG:
             # Use regex matching
             query = """
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c:CodeChunk)
-            WHERE c.content =~ $pattern
+            WHERE c.project_name = $project_name AND c.content =~ $pattern
             RETURN f.path as file_path,
                    c.content as content,
-                   c.start_line as line_number
+                   c.start_line as line_number,
+                   c.project_name as project_name
             LIMIT $limit
             """
         else:
@@ -427,22 +471,27 @@ class Neo4jRAG:
             CALL db.index.fulltext.queryNodes('code_search', $pattern)
             YIELD node as c, score
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c)
+            WHERE c.project_name = $project_name
             RETURN f.path as file_path,
                    c.content as content,
                    c.start_line as line_number,
-                   score as similarity
+                   score as similarity,
+                   c.project_name as project_name
             ORDER BY score DESC
             LIMIT $limit
             """
 
         result = await self.neo4j_driver.execute_query(
-            query, {"pattern": pattern, "limit": limit}, routing_control=RoutingControl.READ
+            query,
+            {"project_name": self.project_name, "pattern": pattern, "limit": limit},
+            routing_control=RoutingControl.READ,
         )
 
         search_results = []
         for record in result.records:
             search_results.append(
                 SearchResult(
+                    project_name=record.get("project_name", self.project_name),
                     file_path=Path(record["file_path"]),
                     content=record["content"],
                     line_number=record["line_number"],
@@ -454,7 +503,7 @@ class Neo4jRAG:
 
     async def get_file_metadata(self, file_path: Path) -> dict[str, Any] | None:
         """
-        Get metadata for a specific file.
+        Get metadata for a specific file in this project.
 
         Args:
             file_path: Path to the file
@@ -463,18 +512,21 @@ class Neo4jRAG:
             File metadata or None if not found
         """
         query = """
-        MATCH (f:CodeFile {path: $path})
+        MATCH (f:CodeFile {project_name: $project_name, path: $path})
         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:CodeChunk)
         RETURN f.path as path,
                f.language as language,
                f.size as size,
                f.last_modified as last_modified,
                f.hash as hash,
+               f.project_name as project_name,
                count(c) as chunk_count
         """
 
         result = await self.neo4j_driver.execute_query(
-            query, {"path": str(file_path)}, routing_control=RoutingControl.READ
+            query,
+            {"project_name": self.project_name, "path": str(file_path)},
+            routing_control=RoutingControl.READ,
         )
 
         if result.records:
@@ -485,6 +537,7 @@ class Neo4jRAG:
                 "size": record["size"],
                 "last_modified": record["last_modified"],
                 "hash": record["hash"],
+                "project_name": record.get("project_name", self.project_name),
                 "chunk_count": record["chunk_count"],
             }
 
@@ -492,25 +545,30 @@ class Neo4jRAG:
 
     async def get_repository_stats(self) -> dict[str, Any]:
         """
-        Get statistics about the indexed repository.
+        Get statistics about the indexed repository for this project.
 
         Returns:
             Dictionary with repository statistics
         """
         query = """
         MATCH (f:CodeFile)
+        WHERE f.project_name = $project_name
         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:CodeChunk)
         RETURN count(DISTINCT f) as total_files,
                count(c) as total_chunks,
                sum(f.size) as total_size,
-               collect(DISTINCT f.language) as languages
+               collect(DISTINCT f.language) as languages,
+               $project_name as project_name
         """
 
-        result = await self.neo4j_driver.execute_query(query, routing_control=RoutingControl.READ)
+        result = await self.neo4j_driver.execute_query(
+            query, {"project_name": self.project_name}, routing_control=RoutingControl.READ
+        )
 
         if result.records:
             record = result.records[0]
             return {
+                "project_name": record.get("project_name", self.project_name),
                 "total_files": record["total_files"],
                 "total_chunks": record["total_chunks"],
                 "total_size": record["total_size"] or 0,
@@ -518,8 +576,20 @@ class Neo4jRAG:
             }
 
         return {
+            "project_name": self.project_name,
             "total_files": 0,
             "total_chunks": 0,
             "total_size": 0,
             "languages": [],
         }
+
+    async def close(self):
+        """
+        Close the Neo4j RAG system and clean up resources.
+        
+        Properly closes the Neo4j driver connection to prevent resource leaks.
+        This method should be called when the RAG system is no longer needed.
+        """
+        if self.neo4j_driver:
+            await self.neo4j_driver.close()
+            logger.info(f"Closed Neo4j RAG system for project {self.project_name}")

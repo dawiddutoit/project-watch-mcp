@@ -7,6 +7,8 @@ Repository monitoring MCP server that creates a Neo4j-based RAG (Retrieval-Augme
 - **Python 3.11+**
 - **Neo4j 5.11+** (required for vector index support)
 - **uv** package manager (`pip install uv`)
+- **OpenAI API key** (optional, for OpenAI embeddings)
+- **Local embedding server** (optional, for self-hosted embeddings)
 
 ## Features
 
@@ -17,10 +19,17 @@ Repository monitoring MCP server that creates a Neo4j-based RAG (Retrieval-Augme
 - **Semantic Search**: Find code by meaning, not just text matching
 - **Pattern Search**: Support for regex and text-based pattern matching
 - **Gitignore Support**: Automatically respects `.gitignore` patterns to exclude files from monitoring
+- **Multiple Embedding Providers**: Support for OpenAI, local, and mock embeddings
 
 ## Quick Neo4j Setup
 
-### Using Docker (Recommended)
+### Using Neo4j Desktop (Recommended)
+Download and install Neo4j Desktop from https://neo4j.com/download/
+- Create a new project and database
+- Start the database
+- Default connection will be at neo4j://localhost:7687
+
+### Using Docker (Alternative)
 ```bash
 docker run -d \
   --name neo4j \
@@ -28,9 +37,6 @@ docker run -d \
   -e NEO4J_AUTH=neo4j/password \
   neo4j:latest
 ```
-
-### Or Install Locally
-Download from https://neo4j.com/download/
 
 ## Installation
 
@@ -74,6 +80,7 @@ uv run project-watch-mcp --repository /path/to/repo
 
 ## Configuration
 
+### Neo4j Configuration
 Set the following environment variables:
 
 - `NEO4J_URI`: Neo4j connection URI (default: `bolt://localhost:7687`)
@@ -82,6 +89,51 @@ Set the following environment variables:
 - `NEO4J_DATABASE`: Neo4j database name (default: `neo4j`)
 - `REPOSITORY_PATH`: Path to repository to monitor (default: current directory)
 - `FILE_PATTERNS`: Comma-separated file patterns to monitor (default: common code files)
+
+### Embedding Provider Configuration
+
+The system supports three embedding providers for semantic search:
+
+#### 1. Mock Provider (Default)
+For testing and development without external dependencies:
+```bash
+export EMBEDDING_PROVIDER=mock
+export EMBEDDING_DIMENSION=384  # Optional, default is 384
+```
+
+#### 2. OpenAI Provider
+For high-quality semantic search using OpenAI's embedding models:
+```bash
+export EMBEDDING_PROVIDER=openai
+export OPENAI_API_KEY=your-api-key-here
+export OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # Optional, default
+```
+
+Available OpenAI models:
+- `text-embedding-3-small` (1536 dimensions) - Recommended
+- `text-embedding-3-large` (3072 dimensions) - Higher quality
+- `text-embedding-ada-002` (1536 dimensions) - Legacy
+
+#### 3. Local Provider
+For self-hosted embedding servers:
+```bash
+export EMBEDDING_PROVIDER=local
+export LOCAL_EMBEDDING_API_URL=http://localhost:8080/embeddings
+export EMBEDDING_DIMENSION=384  # Must match your model's dimension
+```
+
+Your local API should accept POST requests:
+```json
+# Single embedding
+POST /embeddings
+{"text": "code to embed"}
+→ {"embedding": [0.1, 0.2, ...]}
+
+# Batch embeddings
+POST /embeddings
+{"texts": ["code 1", "code 2"]}
+→ {"embeddings": [[0.1, ...], [0.3, ...]]}
+```
 
 ### File Filtering
 
@@ -132,12 +184,27 @@ project-watch-mcp \
 
 ### Using Environment Variables
 ```bash
+# Neo4j configuration
 export NEO4J_URI=bolt://localhost:7687
 export NEO4J_USER=neo4j
 export NEO4J_PASSWORD=mypassword
 export NEO4J_DATABASE=neo4j
+
+# Repository configuration
 export REPOSITORY_PATH=/path/to/repo
 export FILE_PATTERNS="*.py,*.js,*.ts"
+
+# Embedding configuration (choose one)
+# For OpenAI:
+export EMBEDDING_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+
+# For Local:
+export EMBEDDING_PROVIDER=local
+export LOCAL_EMBEDDING_API_URL=http://localhost:8080/embeddings
+
+# For Mock (default):
+export EMBEDDING_PROVIDER=mock
 
 project-watch-mcp
 ```
@@ -177,7 +244,9 @@ Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/
         "your-password"
       ],
       "env": {
-        "NEO4J_URI": "bolt://localhost:7687"
+        "NEO4J_URI": "bolt://localhost:7687",
+        "EMBEDDING_PROVIDER": "openai",
+        "OPENAI_API_KEY": "your-openai-api-key"
       }
     }
   }
@@ -194,31 +263,156 @@ The server supports three transport modes:
 
 The server provides the following MCP tools:
 
-1. **initialize_repository**: Scan and index all files in the repository
-2. **search_code**: Search for code using semantic or pattern matching
-3. **get_repository_stats**: Get statistics about the indexed repository
-4. **get_file_info**: Get metadata about a specific file
-5. **refresh_file**: Manually refresh a file in the index
-6. **monitoring_status**: Check the current monitoring status
+### 1. initialize_repository
+Scan and index all files in the repository for semantic search.
+
+**Key Features:**
+- Idempotent operation (safe to run multiple times)
+- Respects .gitignore patterns automatically
+- Starts real-time file monitoring after indexing
+- Supports 30+ programming languages and file types
+
+**Example Usage:**
+```python
+# First-time initialization
+await initialize_repository()
+# Returns: {"indexed": 42, "total": 45}
+
+# Re-initialization updates only changed files
+await initialize_repository()
+# Returns: {"indexed": 3, "total": 45}
+```
+
+### 2. search_code
+Search repository using AI-powered semantic search or pattern matching.
+
+**Search Types:**
+- **Semantic**: Find conceptually similar code using AI embeddings
+- **Pattern**: Find exact text matches or regex patterns
+
+**Example Usage:**
+```python
+# Semantic search - find authentication logic
+await search_code(
+    query="user authentication and JWT token validation",
+    search_type="semantic",
+    limit=5
+)
+
+# Pattern search with regex - find TODO comments
+await search_code(
+    query="TODO|FIXME|HACK",
+    search_type="pattern",
+    is_regex=True,
+    limit=10
+)
+
+# Language-specific search
+await search_code(
+    query="async function implementations",
+    language="typescript"
+)
+```
+
+**Similarity Scores:**
+- `> 0.8`: Very relevant
+- `0.6-0.8`: Relevant
+- `< 0.6`: Loosely related
+
+### 3. get_repository_stats
+Get comprehensive statistics about the indexed repository.
+
+**Returns:**
+- Total files, chunks, size, and lines
+- Language breakdown with percentages
+- Largest files in the repository
+- Index health and coverage metrics
+
+**Example Output:**
+```json
+{
+    "total_files": 156,
+    "total_chunks": 1243,
+    "languages": {
+        "python": {"files": 89, "percentage": 57.05},
+        "javascript": {"files": 45, "percentage": 28.85}
+    }
+}
+```
+
+### 4. get_file_info
+Get detailed metadata about a specific file.
+
+**Accepts:**
+- Relative paths from repository root
+- Absolute paths within repository
+
+**Returns:**
+- File path, size, language, and modification time
+- Indexing status and chunk count
+- Extracted code elements (imports, classes, functions)
+
+**Example Usage:**
+```python
+# Using relative path
+await get_file_info("src/main.py")
+
+# Using absolute path
+await get_file_info("/home/user/project/README.md")
+```
+
+### 5. refresh_file
+Manually refresh a specific file in the index.
+
+**Use Cases:**
+- Force immediate re-indexing after changes
+- Add newly created files to index
+- Update index when automatic monitoring missed changes
+
+**Example Usage:**
+```python
+await refresh_file("src/updated_module.py")
+# Returns: {"status": "success", "action": "updated", "chunks_after": 7}
+```
+
+### 6. monitoring_status
+Check the current repository monitoring status.
+
+**Returns:**
+- Monitoring state (running/stopped)
+- Repository path and file patterns
+- Pending changes queue
+- Recent file changes with timestamps
+- Monitoring statistics
+
+**Change Types:**
+- `added`: New file created
+- `modified`: Existing file changed
+- `deleted`: File removed
 
 ## Architecture
 
-The system consists of three main components:
+The system consists of four main components:
 
 1. **Repository Monitor**: Watches for file changes using `watchfiles`
    - Automatically loads and respects `.gitignore` patterns
    - Falls back to sensible defaults if no `.gitignore` exists
    - Supports additional custom ignore patterns
 2. **Neo4j RAG**: Manages code indexing and retrieval with Neo4j
-3. **MCP Server**: Exposes functionality through MCP tools
+3. **Embedding Provider**: Generates vector representations for semantic search
+   - OpenAI: Cloud-based, high-quality embeddings
+   - Local: Self-hosted embedding server
+   - Mock: Deterministic embeddings for testing
+4. **MCP Server**: Exposes functionality through MCP tools
 
 ## Troubleshooting
 
 ### Neo4j Connection Issues
 If you get connection errors:
-1. Ensure Neo4j is running: `docker ps` or check http://localhost:7474
-2. Verify credentials match your Neo4j setup
-3. Check firewall settings for ports 7474 and 7687
+1. Ensure Neo4j is running: Check Neo4j Desktop or `docker ps` if using Docker
+2. Verify the browser is accessible at http://localhost:7474
+3. Verify credentials match your Neo4j setup
+4. Check firewall settings for ports 7474 and 7687
 
 ### File Monitoring Issues
 If files aren't being detected:
@@ -228,10 +422,21 @@ If files aren't being detected:
 4. Verify `.gitignore` patterns aren't excluding desired files
 
 ### Performance Considerations
-- Initial indexing time depends on repository size
+- Initial indexing time depends on repository size and embedding provider
 - Large repositories (>10,000 files) may take several minutes
 - Consider using specific file patterns to reduce scope
 - Neo4j memory settings may need adjustment for large codebases
+- Embedding performance:
+  - Mock: Instant (no real embeddings)
+  - OpenAI: ~100-500ms per embedding (API calls)
+  - Local: Depends on your hardware and model
+
+### Embedding Provider Issues
+If embeddings fail:
+1. **OpenAI**: Check API key is valid and has credits
+2. **Local**: Ensure embedding server is running at configured URL
+3. **Mock**: Should always work (for testing only)
+4. Use `--verbose` flag to see detailed error messages
 
 ## Advanced Usage
 

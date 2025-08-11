@@ -95,6 +95,7 @@ class RepositoryMonitor:
     def __init__(
         self,
         repo_path: Path,
+        project_name: str,
         neo4j_driver: AsyncDriver,
         file_patterns: list[str] | None = None,
         ignore_patterns: list[str] | None = None,
@@ -105,12 +106,14 @@ class RepositoryMonitor:
 
         Args:
             repo_path: Path to the repository to monitor
+            project_name: Name of the project for context isolation
             neo4j_driver: Neo4j driver for database connection
             file_patterns: List of file patterns to include (e.g., ["*.py", "*.js"])
             ignore_patterns: List of patterns to ignore (in addition to .gitignore)
             use_gitignore: Whether to use the project's .gitignore file
         """
         self.repo_path = Path(repo_path).resolve()
+        self.project_name = project_name
         self.neo4j_driver = neo4j_driver
         self.file_patterns = file_patterns or ["*"]
         self.use_gitignore = use_gitignore

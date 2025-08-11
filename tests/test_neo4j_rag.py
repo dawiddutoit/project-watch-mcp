@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from src.project-watch-mcp.neo4j_rag import (
+from src.project_watch_mcp.neo4j_rag import (
     CodeFile,
     Neo4jRAG,
 )
@@ -36,6 +36,7 @@ async def neo4j_rag(mock_neo4j_driver, mock_embeddings):
     """Create a Neo4jRAG instance for testing."""
     rag = Neo4jRAG(
         neo4j_driver=mock_neo4j_driver,
+        project_name="test_project",
         embeddings=mock_embeddings,
         chunk_size=100,
         chunk_overlap=20,
@@ -49,6 +50,7 @@ class TestNeo4jRAG:
 
     async def test_initialization(self, neo4j_rag):
         """Test that Neo4jRAG initializes correctly."""
+        assert neo4j_rag.project_name == "test_project"
         assert neo4j_rag.chunk_size == 100
         assert neo4j_rag.chunk_overlap == 20
         assert neo4j_rag.neo4j_driver is not None
@@ -64,6 +66,7 @@ class TestNeo4jRAG:
     async def test_index_file(self, neo4j_rag):
         """Test indexing a single file."""
         code_file = CodeFile(
+            project_name="test_project",
             path=Path("/test/file.py"),
             content="def hello():\n    print('Hello, World!')",
             language="python",
@@ -97,6 +100,7 @@ class TestNeo4jRAG:
                     "chunk_content": "def hello():",
                     "similarity": 0.95,
                     "line_number": 1,
+                    "project_name": "test_project",
                 }
             ]
         )
@@ -130,6 +134,7 @@ class TestNeo4jRAG:
     async def test_update_file(self, neo4j_rag):
         """Test updating an existing file in the graph."""
         code_file = CodeFile(
+            project_name="test_project",
             path=Path("/test/file.py"),
             content="# Updated content",
             language="python",

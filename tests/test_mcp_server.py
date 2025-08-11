@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.project-watch-mcp.server import create_mcp_server
+from src.project_watch_mcp.server import create_mcp_server
 
 
 @pytest.fixture
@@ -37,6 +37,7 @@ def mcp_server(mock_repository_monitor, mock_neo4j_rag):
     return create_mcp_server(
         repository_monitor=mock_repository_monitor,
         neo4j_rag=mock_neo4j_rag,
+        project_name="test_project",
     )
 
 
