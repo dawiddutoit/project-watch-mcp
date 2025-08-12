@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /Users/dawiddutoit/projects/play/project-watch-mcp/.claude/hooks/session-start/session-start.py"
+          }
+        ]
+      }
+    ]
+  }
+}

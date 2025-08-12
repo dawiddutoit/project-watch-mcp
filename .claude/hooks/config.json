@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "SessionStart": {
+      "enabled": true,
+      "description": "Automatically initialize Project Watch MCP repository monitoring when Claude session starts",
+      "type": "python",
+      "script": "session-start/session-start.py",
+      "timeout": 30,
+      "error_handling": "continue",
+      "environment": {
+        "PYTHONPATH": "${PROJECT_ROOT}/src"
+      }
+    }
+  },
+  "settings": {
+    "log_level": "info",
+    "log_file": ".claude/hooks/session.log",
+    "enable_notifications": true
+  }
+}

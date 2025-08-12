@@ -1,0 +1,10 @@
+{
+  "timestamp": "2025-08-12T09:44:53.742567",
+  "result": {
+    "status": "success",
+    "indexed": 0,
+    "total": 0,
+    "method": "direct",
+    "project_name": "_claude"
+  }
+}

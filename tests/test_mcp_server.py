@@ -82,6 +82,11 @@ class TestMCPServer:
         tools = await mcp_server.get_tools()
         assert "monitoring_status" in tools
 
+    async def test_has_delete_file_tool(self, mcp_server):
+        """Test that delete_file tool is registered."""
+        tools = await mcp_server.get_tools()
+        assert "delete_file" in tools
+
     async def test_all_expected_tools_registered(self, mcp_server):
         """Test that all expected tools are registered."""
         tools = await mcp_server.get_tools()
@@ -92,6 +97,7 @@ class TestMCPServer:
             "get_repository_stats",
             "get_file_info",
             "refresh_file",
+            "delete_file",
             "monitoring_status",
         ]
 

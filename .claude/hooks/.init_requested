@@ -1,0 +1,10 @@
+{
+  "timestamp": "2025-08-11T20:31:43.520278",
+  "repository": "/Users/dawiddutoit/projects/play/project-watch-mcp",
+  "neo4j_config": {
+    "NEO4J_URI": "neo4j://127.0.0.1:7687",
+    "NEO4J_USER": "neo4j",
+    "NEO4J_PASSWORD": "***",
+    "NEO4J_DB": "memory"
+  }
+}

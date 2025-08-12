@@ -26,6 +26,7 @@ dependencies = [
     "openai>=1.99.6",
     "pathspec>=0.12.1",
     "pydantic>=2.10.1",
+    "radon>=6.0.1",
     "watchfiles>=0.24.0",
 ]
 

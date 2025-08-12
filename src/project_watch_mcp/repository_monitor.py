@@ -62,6 +62,7 @@ class FileInfo:
             ".json": "json",
             ".yaml": "yaml",
             ".yml": "yaml",
+            ".toml": "toml",
             ".xml": "xml",
             ".html": "html",
             ".css": "css",

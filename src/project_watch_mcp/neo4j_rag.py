@@ -5,6 +5,7 @@ Requires Neo4j 5.11+ with vector index support.
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,10 +32,121 @@ class CodeFile:
     size: int
     last_modified: datetime
 
+    # Optional enhanced metadata fields
+    filename: str | None = None
+    namespace: str | None = None
+    is_test: bool = False
+    is_config: bool = False
+    is_resource: bool = False
+    is_documentation: bool = False
+    package_path: str | None = None
+    module_imports: list[str] | None = None
+    exported_symbols: list[str] | None = None
+    dependencies: list[str] | None = None
+    complexity_score: int | None = None
+    line_count: int | None = None
+
+    def __post_init__(self):
+        """Initialize derived fields after dataclass initialization."""
+        # Auto-populate filename if not provided
+        if self.filename is None:
+            self.filename = self.path.name
+
+        # Auto-detect file type if not explicitly set
+        if not any([self.is_test, self.is_config, self.is_resource, self.is_documentation]):
+            self._detect_file_type()
+
+        # Calculate line count if not provided
+        if self.line_count is None:
+            # Empty content should still count as 1 line (like most editors show)
+            self.line_count = max(1, len(self.content.splitlines()))
+
+        # Extract namespace/package for supported languages
+        if self.namespace is None and self.language in ["python", "java", "csharp", "typescript", "javascript"]:
+            self._extract_namespace()
+
+    def _detect_file_type(self):
+        """Auto-detect the type of file based on naming patterns and content."""
+        filename_lower = self.filename.lower()
+        path_str = str(self.path).lower()
+
+        # Test file detection
+        test_patterns = ["test_", "_test.", "spec.", ".test.", ".spec.", "tests/", "test/", "__tests__/"]
+        self.is_test = any(pattern in filename_lower or pattern in path_str for pattern in test_patterns)
+
+        # Config file detection
+        config_patterns = ["config", "settings", ".yaml", ".yml", ".toml", ".ini", ".env", ".json"]
+        config_names = ["package.json", "pyproject.toml", "tsconfig.json", "webpack.config", "jest.config"]
+        # Check for rc files (e.g., .bashrc, .vimrc)
+        is_rc_file = filename_lower.startswith(".") and filename_lower.endswith("rc")
+        self.is_config = (
+            any(pattern in filename_lower for pattern in config_patterns) or
+            any(name in filename_lower for name in config_names) or
+            is_rc_file
+        )
+
+        # Resource file detection
+        resource_extensions = [".sql", ".xml", ".csv", ".txt", ".dat", ".png", ".jpg", ".svg", ".css", ".scss"]
+        self.is_resource = any(filename_lower.endswith(ext) for ext in resource_extensions)
+
+        # Documentation detection
+        doc_patterns = [".md", ".rst", ".adoc", "readme", "changelog", "license", "contributing"]
+        self.is_documentation = any(pattern in filename_lower for pattern in doc_patterns)
+
+    def _extract_namespace(self):
+        """Extract namespace or package information based on language."""
+        if self.language == "python":
+            # Extract from package structure
+            parts = self.path.parts
+            if "src" in parts:
+                idx = parts.index("src")
+                package_parts = [p for p in parts[idx+1:-1] if not p.startswith("__")]
+                if package_parts:
+                    self.namespace = ".".join(package_parts)
+            elif "site-packages" in str(self.path):
+                # Handle installed packages
+                path_str = str(self.path)
+                idx = path_str.find("site-packages/") + len("site-packages/")
+                remaining = path_str[idx:]
+                package_name = remaining.split("/")[0]
+                self.namespace = package_name
+        elif self.language == "java":
+            # Extract package declaration
+            package_match = re.search(r'^\s*package\s+([a-zA-Z0-9_.]+)\s*;', self.content, re.MULTILINE)
+            if package_match:
+                self.namespace = package_match.group(1)
+        elif self.language == "csharp":
+            # Extract namespace declaration
+            namespace_match = re.search(r'^\s*namespace\s+([a-zA-Z0-9_.]+)', self.content, re.MULTILINE)
+            if namespace_match:
+                self.namespace = namespace_match.group(1)
+        elif self.language in ["typescript", "javascript"]:
+            # Use module path relative to src or project root
+            parts = self.path.parts
+            if "src" in parts:
+                idx = parts.index("src")
+                module_parts = parts[idx+1:-1]
+                if module_parts:
+                    self.namespace = "/".join(module_parts)
+
     @property
     def file_hash(self) -> str:
         """Generate a hash of the file content."""
         return hashlib.sha256(self.content.encode()).hexdigest()
+
+    @property
+    def file_category(self) -> str:
+        """Get the primary category of the file."""
+        if self.is_test:
+            return "test"
+        elif self.is_config:
+            return "config"
+        elif self.is_resource:
+            return "resource"
+        elif self.is_documentation:
+            return "documentation"
+        else:
+            return "source"
 
 
 @dataclass
@@ -208,7 +320,7 @@ class Neo4jRAG:
         RETURN f
         """
 
-        file_result = await self.neo4j_driver.execute_query(
+        await self.neo4j_driver.execute_query(
             file_query,
             {
                 "project_name": self.project_name,
@@ -236,7 +348,6 @@ class Neo4jRAG:
         # Create chunks and index them
         chunks = self.chunk_content(code_file.content, self.chunk_size, self.chunk_overlap)
 
-        lines = code_file.content.split("\n")
         current_line = 0
 
         for i, chunk in enumerate(chunks):
@@ -391,14 +502,14 @@ class Neo4jRAG:
             # Manual cosine similarity calculation
             cypher += """
             WITH f, c,
-                 reduce(dot = 0.0, i IN range(0, size($query_embedding)-1) | 
+                 reduce(dot = 0.0, i IN range(0, size($query_embedding)-1) |
                         dot + c.embedding[i] * $query_embedding[i]) AS dotProduct,
-                 reduce(qNorm = 0.0, i IN range(0, size($query_embedding)-1) | 
+                 reduce(qNorm = 0.0, i IN range(0, size($query_embedding)-1) |
                         qNorm + $query_embedding[i] * $query_embedding[i]) AS queryNorm,
-                 reduce(cNorm = 0.0, i IN range(0, size(c.embedding)-1) | 
+                 reduce(cNorm = 0.0, i IN range(0, size(c.embedding)-1) |
                         cNorm + c.embedding[i] * c.embedding[i]) AS chunkNorm
-            WITH f, c, 
-                 CASE WHEN queryNorm > 0 AND chunkNorm > 0 
+            WITH f, c,
+                 CASE WHEN queryNorm > 0 AND chunkNorm > 0
                       THEN dotProduct / (sqrt(queryNorm) * sqrt(chunkNorm))
                       ELSE 0.0 END AS similarity
             WHERE similarity > 0.3
@@ -586,7 +697,7 @@ class Neo4jRAG:
     async def close(self):
         """
         Close the Neo4j RAG system and clean up resources.
-        
+
         Properly closes the Neo4j driver connection to prevent resource leaks.
         This method should be called when the RAG system is no longer needed.
         """

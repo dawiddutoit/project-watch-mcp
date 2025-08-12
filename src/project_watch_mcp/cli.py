@@ -33,7 +33,7 @@ async def main(
     host: str = "127.0.0.1",
     port: int = 8000,
     path: str = "/mcp/",
-    file_patterns: str = "*.py,*.js,*.ts,*.java,*.go,*.rs,*.md,*.json,*.yaml,*.yml",
+    file_patterns: str = "*.py,*.js,*.ts,*.java,*.go,*.rs,*.md,*.json,*.yaml,*.yml,*.toml",
 ) -> None:
     """
     Main entry point for the Project Watch MCP server.
@@ -292,7 +292,7 @@ Embedding Provider Configuration:
         parser.error(f"Repository path is not a directory: {repository_path}")
 
     file_patterns = args.file_patterns or os.getenv(
-        "FILE_PATTERNS", "*.py,*.js,*.ts,*.java,*.go,*.rs,*.md,*.json,*.yaml,*.yml"
+        "FILE_PATTERNS", "*.py,*.js,*.ts,*.java,*.go,*.rs,*.md,*.json,*.yaml,*.yml,*.toml"
     )
 
     transport = args.transport or os.getenv("MCP_TRANSPORT", "stdio")

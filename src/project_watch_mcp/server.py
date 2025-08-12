@@ -14,6 +14,13 @@ from pydantic import Field
 from .neo4j_rag import CodeFile, Neo4jRAG
 from .repository_monitor import FileInfo, RepositoryMonitor
 
+try:
+    from radon.complexity import cc_rank, cc_visit
+    from radon.metrics import mi_visit
+    RADON_AVAILABLE = True
+except ImportError:
+    RADON_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +30,7 @@ def create_mcp_server(
     project_name: str,
 ) -> FastMCP:
     """
-    Create an MCP server for repository monitoring and RAG.
+    Create an MCP server for repository monitoring and RAG. test
 
     Args:
         repository_monitor: Repository monitor instance
@@ -37,7 +44,7 @@ def create_mcp_server(
 
     @mcp.tool(
         annotations=ToolAnnotations(
-            title="Initialize Repository",
+            title="Initialize Repo",
             readOnlyHint=False,
             destructiveHint=False,
             idempotentHint=True,
@@ -60,7 +67,7 @@ def create_mcp_server(
                 "total": 45,
                 "message": "Repository initialized. Indexed 42/45 files."
             }
-            
+
             >>> # Re-initialization (updates existing index)
             >>> await initialize_repository()
             {
@@ -83,9 +90,9 @@ def create_mcp_server(
             - Safe to run multiple times (idempotent)
             - Automatically detects and updates only changed files on re-run
             - Respects .gitignore patterns in repository
-            - Supports: .py, .js, .ts, .jsx, .tsx, .java, .cpp, .c, .h, .hpp, 
-              .cs, .go, .rs, .rb, .php, .swift, .kt, .scala, .r, .m, .sql, 
-              .sh, .yaml, .yml, .json, .xml, .html, .css, .scss, .md, .txt
+            - Supports: .py, .js, .ts, .jsx, .tsx, .java, .cpp, .c, .h, .hpp,
+              .cs, .go, .rs, .rb, .php, .swift, .kt, .scala, .r, .m, .sql,
+              .sh, .yaml, .yml, .toml, .json, .xml, .html, .css, .scss, .md, .txt
         """
         try:
             # Scan repository for files
@@ -141,23 +148,22 @@ def create_mcp_server(
     async def search_code(
         query: str = Field(
             ...,
-            description="For semantic: Natural language description. For pattern: Exact text or regex"
+            description="For semantic: Natural language description. For pattern: Exact text or regex",
         ),
         search_type: Literal["semantic", "pattern"] = Field(
             default="semantic",
-            description="'semantic' for AI-powered conceptual search, 'pattern' for exact/regex matching"
+            description="'semantic' for AI-powered conceptual search, 'pattern' for exact/regex matching",
         ),
         is_regex: bool = Field(
             default=False,
-            description="Only for pattern search - treat query as regex (Python regex syntax)"
+            description="Only for pattern search - treat query as regex (Python regex syntax)",
         ),
         limit: int = Field(
-            default=10,
-            description="Maximum results to return (default: 10, max: 100)"
+            default=10, description="Maximum results to return (default: 10, max: 100)"
         ),
         language: str | None = Field(
             default=None,
-            description="Filter by programming language (e.g., 'python', 'javascript', 'typescript')"
+            description="Filter by programming language (e.g., 'python', 'javascript', 'typescript')",
         ),
     ) -> ToolResult:
         """
@@ -184,7 +190,7 @@ def create_mcp_server(
                     }
                 ]
             }
-            
+
             >>> # Pattern search - find all TODO comments
             >>> await search_code(
             ...     query="TODO|FIXME|HACK",
@@ -202,7 +208,7 @@ def create_mcp_server(
                     }
                 ]
             }
-            
+
             >>> # Language-specific search
             >>> await search_code(
             ...     query="async function implementations",
@@ -211,10 +217,10 @@ def create_mcp_server(
             ... )
 
         Args:
-            query: 
+            query:
                 - For semantic: Natural language description of what you're looking for
                 - For pattern: Exact text or regex pattern to match
-            search_type: 
+            search_type:
                 - "semantic": AI-powered conceptual search (default)
                 - "pattern": Exact text or regex matching
             is_regex: Only for pattern search - treat query as regex (default: False)
@@ -366,8 +372,7 @@ def create_mcp_server(
     )
     async def get_file_info(
         file_path: str = Field(
-            ...,
-            description="Path to the file (relative from repo root or absolute within repo)"
+            ..., description="Path to the file (relative from repo root or absolute within repo)"
         )
     ) -> dict:
         """
@@ -393,7 +398,7 @@ def create_mcp_server(
                 "classes": ["MainApp", "ConfigManager"],
                 "functions": ["main", "setup_logging", "process_data"]
             }
-            
+
             >>> # Using absolute path
             >>> await get_file_info("/home/user/project/README.md")
             {
@@ -403,7 +408,7 @@ def create_mcp_server(
                 "indexed": true,
                 ...
             }
-            
+
             >>> # File not in index
             >>> await get_file_info("non_existent.py")
             {
@@ -477,8 +482,7 @@ def create_mcp_server(
     )
     async def refresh_file(
         file_path: str = Field(
-            ...,
-            description="Path to the file to refresh (relative from repo root or absolute)"
+            ..., description="Path to the file to refresh (relative from repo root or absolute)"
         )
     ) -> ToolResult:
         """
@@ -498,7 +502,7 @@ def create_mcp_server(
                 "chunks_after": 7,
                 "time_ms": 123
             }
-            
+
             >>> # File doesn't exist
             >>> await refresh_file("deleted_file.py")
             {
@@ -506,7 +510,7 @@ def create_mcp_server(
                 "message": "File not found",
                 "suggestion": "File may have been deleted. Run initialize_repository to clean index."
             }
-            
+
             >>> # New file not yet indexed
             >>> await refresh_file("src/new_feature.py")
             {
@@ -585,6 +589,368 @@ def create_mcp_server(
         except Exception as e:
             logger.error(f"Failed to refresh file: {e}")
             raise ToolError(f"Failed to refresh file: {e}")
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Delete File",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        )
+    )
+    async def delete_file(
+        file_path: str = Field(
+            ..., description="Path to the file to delete from index (relative from repo root or absolute)"
+        )
+    ) -> ToolResult:
+        """
+        Delete a file and its chunks from the Neo4j index.
+
+        Removes all indexed data for a file, including its metadata and code chunks.
+        This operation only affects the index - it does NOT delete the actual file
+        from the filesystem.
+
+        Examples:
+            >>> # Delete a file from the index
+            >>> await delete_file("src/deprecated_module.py")
+            {
+                "status": "success",
+                "message": "File removed from index",
+                "file": "src/deprecated_module.py",
+                "chunks_removed": 12
+            }
+
+            >>> # File not in index
+            >>> await delete_file("non_indexed_file.py")
+            {
+                "status": "warning",
+                "message": "File not found in index",
+                "file": "non_indexed_file.py"
+            }
+
+            >>> # Delete with absolute path
+            >>> await delete_file("/home/user/project/src/old_file.py")
+            {
+                "status": "success",
+                "message": "File removed from index",
+                "file": "/home/user/project/src/old_file.py",
+                "chunks_removed": 8
+            }
+
+        Args:
+            file_path: Path to the file to delete from index
+                - Relative paths: Interpreted from repository root
+                - Absolute paths: Must be within repository
+                - File doesn't need to exist on filesystem
+
+        Returns:
+            ToolResult with deletion status:
+            - status: "success", "warning", or "error"
+            - message: Description of what happened
+            - file: Normalized file path
+            - chunks_removed: Number of chunks deleted (if successful)
+
+        Raises:
+            ToolError: When deletion operation fails
+
+        Notes:
+            - This only removes the file from the Neo4j index
+            - The actual file on disk is NOT deleted
+            - Use this when files are deleted/moved outside of monitored changes
+            - To re-index the file, use refresh_file or initialize_repository
+            - Deletion is immediate and permanent for the index
+        """
+        try:
+            path = Path(file_path)
+            if not path.is_absolute():
+                path = repository_monitor.repo_path / path
+
+            # Check if file exists in index before deletion
+            metadata = await neo4j_rag.get_file_metadata(path)
+
+            if not metadata:
+                result_text = f"File {file_path} not found in index"
+                return ToolResult(
+                    content=[TextContent(type="text", text=result_text)],
+                    structured_content={
+                        "status": "warning",
+                        "message": "File not found in index",
+                        "file": str(path)
+                    },
+                )
+
+            chunks_count = metadata.get("chunk_count", 0)
+
+            # Delete from Neo4j
+            await neo4j_rag.delete_file(path)
+
+            result_text = f"Successfully deleted {file_path} from index ({chunks_count} chunks removed)"
+
+            return ToolResult(
+                content=[TextContent(type="text", text=result_text)],
+                structured_content={
+                    "status": "success",
+                    "message": "File removed from index",
+                    "file": str(path),
+                    "chunks_removed": chunks_count
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to delete file from index: {e}")
+            raise ToolError(f"Failed to delete file from index: {e}")
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Analyze Complexity",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        )
+    )
+    async def analyze_complexity(
+        file_path: str = Field(
+            ..., description="Path to the Python file to analyze (relative from repo root or absolute)"
+        ),
+        include_metrics: bool = Field(
+            default=True,
+            description="Include additional metrics like maintainability index"
+        )
+    ) -> ToolResult:
+        """
+        Calculate cyclomatic complexity for Python files.
+
+        Analyzes Python code to determine its cyclomatic complexity, which measures
+        the number of linearly independent paths through a program's source code.
+        Higher complexity indicates more difficult code to understand and maintain.
+
+        Examples:
+            >>> # Analyze a single Python file
+            >>> await analyze_complexity("src/main.py")
+            {
+                "file": "src/main.py",
+                "summary": {
+                    "total_complexity": 42,
+                    "average_complexity": 3.5,
+                    "maintainability_index": 65.2,
+                    "complexity_grade": "B"
+                },
+                "functions": [
+                    {
+                        "name": "complex_function",
+                        "complexity": 15,
+                        "rank": "D",
+                        "line": 45,
+                        "classification": "complex"
+                    },
+                    {
+                        "name": "simple_function",
+                        "complexity": 2,
+                        "rank": "A",
+                        "line": 10,
+                        "classification": "simple"
+                    }
+                ],
+                "recommendations": [
+                    "Consider refactoring 'complex_function' (complexity: 15)",
+                    "2 functions have complexity > 10"
+                ]
+            }
+
+            >>> # Analyze with basic metrics only
+            >>> await analyze_complexity("tests/test_server.py", include_metrics=False)
+            {
+                "file": "tests/test_server.py",
+                "summary": {
+                    "total_complexity": 18,
+                    "average_complexity": 2.0
+                },
+                "functions": [...]
+            }
+
+        Args:
+            file_path: Path to the Python file to analyze
+                - Relative paths: Interpreted from repository root
+                - Absolute paths: Must be within repository
+                - Must be a Python file (.py extension)
+            include_metrics: Whether to include additional metrics like maintainability index
+
+        Returns:
+            ToolResult with complexity analysis:
+            - file: Analyzed file path
+            - summary: Overall file metrics
+                - total_complexity: Sum of all function complexities
+                - average_complexity: Average complexity per function
+                - maintainability_index: MI score (0-100, higher is better)
+                - complexity_grade: Letter grade (A-F) based on MI
+            - functions: List of functions with their complexity scores
+                - name: Function/method name
+                - complexity: Cyclomatic complexity score
+                - rank: Complexity rank (A-F)
+                - line: Line number where function starts
+                - classification: simple/moderate/complex/very-complex
+            - recommendations: Suggestions for improvement
+
+        Raises:
+            ToolError: When analysis fails or file is not Python
+
+        Notes:
+            - Complexity ranks: A (1-5), B (6-10), C (11-20), D (21-30), E (31-40), F (41+)
+            - Maintainability Index: >20 (maintainable), 10-20 (moderate), <10 (low)
+            - Only analyzes Python files (.py extension)
+            - Skips files that cannot be parsed as valid Python
+            - Complex functions (>10) should be considered for refactoring
+        """
+        if not RADON_AVAILABLE:
+            raise ToolError("Radon library not available. Please install it with: uv add radon")
+
+        try:
+            path = Path(file_path)
+            if not path.is_absolute():
+                path = repository_monitor.repo_path / path
+
+            # Check if file exists and is a Python file
+            if not path.exists():
+                raise ToolError(f"File {file_path} does not exist")
+
+            if not str(path).endswith('.py'):
+                raise ToolError(f"File {file_path} is not a Python file (.py extension required)")
+
+            # Read file content
+            content = path.read_text(encoding="utf-8")
+
+            # Calculate cyclomatic complexity
+            cc_results = cc_visit(content)
+
+            # Prepare function complexity data
+            functions = []
+            total_complexity = 0
+
+            for item in cc_results:
+                complexity = item.complexity
+                total_complexity += complexity
+
+                # Determine classification
+                if complexity <= 5:
+                    classification = "simple"
+                elif complexity <= 10:
+                    classification = "moderate"
+                elif complexity <= 20:
+                    classification = "complex"
+                else:
+                    classification = "very-complex"
+
+                functions.append({
+                    "name": item.name,
+                    "complexity": complexity,
+                    "rank": cc_rank(complexity),
+                    "line": item.lineno,
+                    "classification": classification,
+                    "type": item.__class__.__name__.lower()  # 'function' or 'method'
+                })
+
+            # Sort functions by complexity (highest first)
+            functions.sort(key=lambda x: x["complexity"], reverse=True)
+
+            # Calculate average complexity
+            avg_complexity = total_complexity / len(functions) if functions else 0
+
+            # Prepare summary
+            summary = {
+                "total_complexity": total_complexity,
+                "average_complexity": round(avg_complexity, 2),
+                "function_count": len(functions)
+            }
+
+            # Add maintainability index if requested
+            if include_metrics:
+                mi_score = mi_visit(content, multi=False)
+                summary["maintainability_index"] = round(mi_score, 2)
+
+                # Determine grade based on MI score
+                if mi_score >= 80:
+                    grade = "A"
+                elif mi_score >= 60:
+                    grade = "B"
+                elif mi_score >= 40:
+                    grade = "C"
+                elif mi_score >= 20:
+                    grade = "D"
+                else:
+                    grade = "F"
+                summary["complexity_grade"] = grade
+
+            # Generate recommendations
+            recommendations = []
+            complex_functions = [f for f in functions if f["complexity"] > 10]
+            very_complex_functions = [f for f in functions if f["complexity"] > 20]
+
+            if very_complex_functions:
+                for func in very_complex_functions[:3]:  # Top 3 most complex
+                    recommendations.append(
+                        f"Urgent: Refactor '{func['name']}' (complexity: {func['complexity']})"
+                    )
+            elif complex_functions:
+                for func in complex_functions[:3]:  # Top 3 complex
+                    recommendations.append(
+                        f"Consider refactoring '{func['name']}' (complexity: {func['complexity']})"
+                    )
+
+            if complex_functions:
+                recommendations.append(
+                    f"{len(complex_functions)} function(s) have complexity > 10"
+                )
+
+            if avg_complexity > 10:
+                recommendations.append(
+                    f"High average complexity ({avg_complexity:.1f}). Consider breaking down functions"
+                )
+
+            if include_metrics and summary.get("maintainability_index", 100) < 20:
+                recommendations.append(
+                    "Low maintainability index. Code needs significant refactoring"
+                )
+
+            if not recommendations:
+                recommendations.append("Code complexity is within acceptable limits")
+
+            # Format result text
+            result_text = f"Complexity Analysis for {file_path}:\n\n"
+            result_text += "Summary:\n"
+            result_text += f"  Total Complexity: {summary['total_complexity']}\n"
+            result_text += f"  Average Complexity: {summary['average_complexity']}\n"
+            result_text += f"  Functions Analyzed: {summary['function_count']}\n"
+
+            if include_metrics:
+                result_text += f"  Maintainability Index: {summary['maintainability_index']} (Grade: {summary['complexity_grade']})\n"
+
+            result_text += "\nTop Complex Functions:\n"
+            for func in functions[:5]:  # Show top 5
+                result_text += f"  - {func['name']} (line {func['line']}): {func['complexity']} ({func['rank']}) - {func['classification']}\n"
+
+            if recommendations:
+                result_text += "\nRecommendations:\n"
+                for rec in recommendations:
+                    result_text += f"  • {rec}\n"
+
+            return ToolResult(
+                content=[TextContent(type="text", text=result_text)],
+                structured_content={
+                    "file": str(path.relative_to(repository_monitor.repo_path)),
+                    "summary": summary,
+                    "functions": functions[:20],  # Limit to top 20 for response size
+                    "recommendations": recommendations
+                }
+            )
+
+        except SyntaxError as e:
+            logger.error(f"Syntax error in file {file_path}: {e}")
+            raise ToolError(f"Failed to parse Python file: {e}") from e
+        except Exception as e:
+            logger.error(f"Failed to analyze complexity: {e}")
+            raise ToolError(f"Failed to analyze complexity: {e}") from e
 
     @mcp.tool(
         annotations=ToolAnnotations(

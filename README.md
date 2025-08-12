@@ -375,7 +375,75 @@ await refresh_file("src/updated_module.py")
 # Returns: {"status": "success", "action": "updated", "chunks_after": 7}
 ```
 
-### 6. monitoring_status
+### 6. delete_file
+Remove a file and its chunks from the Neo4j index.
+
+**Important:** This only removes the file from the index - it does NOT delete the actual file from the filesystem.
+
+**Use Cases:**
+- Clean up index after files are deleted from repository
+- Remove temporarily indexed files
+- Clear outdated or moved files from index
+
+**Example Usage:**
+```python
+# Delete a file from the index
+await delete_file("src/deprecated_module.py")
+# Returns: {"status": "success", "chunks_removed": 12}
+
+# File not in index
+await delete_file("non_indexed_file.py")
+# Returns: {"status": "warning", "message": "File not found in index"}
+```
+
+### 7. analyze_complexity
+Calculate cyclomatic complexity for Python files to assess code maintainability.
+
+**Key Features:**
+- Measures cyclomatic complexity for each function/method
+- Calculates maintainability index (MI score)
+- Provides complexity rankings (A-F)
+- Generates actionable refactoring recommendations
+
+**Parameters:**
+- `file_path`: Path to the Python file to analyze
+- `include_metrics`: Include additional metrics like maintainability index (default: true)
+
+**Example:**
+```json
+{
+  "file": "src/complex_module.py",
+  "summary": {
+    "total_complexity": 42,
+    "average_complexity": 5.2,
+    "maintainability_index": 65.4,
+    "complexity_grade": "B"
+  },
+  "functions": [
+    {
+      "name": "process_data",
+      "complexity": 15,
+      "rank": "D",
+      "line": 45,
+      "classification": "complex"
+    }
+  ],
+  "recommendations": [
+    "Consider refactoring 'process_data' (complexity: 15)",
+    "3 functions have complexity > 10"
+  ]
+}
+```
+
+**Complexity Rankings:**
+- **A (1-5)**: Simple, easy to understand
+- **B (6-10)**: Moderate complexity
+- **C (11-20)**: Complex, consider refactoring
+- **D (21-30)**: Very complex, needs refactoring
+- **E (31-40)**: High risk, difficult to maintain
+- **F (41+)**: Extremely complex, urgent refactoring needed
+
+### 8. monitoring_status
 Check the current repository monitoring status.
 
 **Returns:**
