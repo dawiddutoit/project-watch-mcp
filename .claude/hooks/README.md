@@ -1,92 +1,107 @@
-# Claude SessionStart Hook for Project Watch MCP
+# Claude Code Hooks
 
-This directory contains hooks that are executed when Claude starts a session in this project.
+This directory contains project-specific hooks for the project-watch-mcp project, following the official Claude Code hooks specification.
 
-## Enhanced SessionStart Hook
+## Hook Configuration
 
-The `session-start/session-start.py` hook **directly initializes** the Project Watch MCP repository monitoring when a Claude session begins, without requiring Claude to interpret and execute commands.
+Hooks are configured in `.claude/settings.json` and follow the Claude Code hooks specification:
+- https://docs.anthropic.com/en/docs/claude-code/hooks
 
-### What it does:
+## Active Hooks
 
-1. **Direct Execution**: Imports and runs the server initialization code directly
-2. **Connects to Neo4j**: Establishes database connection with 5-second timeout
-3. **Scans Repository**: Identifies all matching files based on patterns
-4. **Indexes Files**: Creates semantic embeddings for intelligent search
-5. **Returns Status**: Reports success/failure to Claude with statistics
+### 1. Session Start Hook (`session_start.sh`)
+- **Event**: SessionStart
+- **Purpose**: Automatically initializes the MCP server when a Claude session starts
+- **Behavior**: Runs `uv run project-watch-mcp --initialize` to index the repository
 
-### Manual Initialization
+### 2. Agent Enforcement Hook (`enforce_agent_usage.py`)
+- **Event**: PreToolUse
+- **Purpose**: Enforces the use of appropriate agents for tool calls
+- **Behavior**: 
+  - Allows direct use of read-only tools (Read, LS, Bash, etc.)
+  - Blocks write operations without proper agent delegation
+  - Provides guidance on which agent to use
 
-If the automatic hook doesn't trigger or you disabled it, you can manually initialize the repository by:
+## Hook Structure
 
-1. **Using the MCP tool directly**:
-   ```
-   Call: mcp__project-watch-local__initialize_repository
-   ```
+According to the official documentation, hooks:
+1. Receive JSON input via stdin
+2. Communicate via exit codes:
+   - Exit 0: Allow the action to proceed
+   - Exit 2: Block the action
+3. Can output messages to stderr for user feedback
 
-2. **Running the hook manually**:
-   ```bash
-   echo '{"session_id": "manual", "cwd": "$(pwd)"}' | python .claude/hooks/session-start/session-start.py
-   ```
+## Configuration Format
 
-### Disabling Auto-Initialization
+Hooks are configured in `.claude/settings.json`:
 
-To prevent automatic initialization on session start:
-
-```bash
-touch .claude/.skip_auto_init
+```json
+{
+  "hooks": {
+    "EventName": [
+      {
+        "matcher": "pattern",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/script.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-Remove the file to re-enable:
+## Environment Variables
+
+- `$CLAUDE_PROJECT_DIR`: Path to the project root
+- `$CLAUDE_AGENT_CONTEXT`: Custom variable to track agent context
+
+## Testing Hooks
+
+To test a hook manually:
+
 ```bash
-rm .claude/.skip_auto_init
+# Test the enforcement hook
+echo '{"tool": {"name": "Write"}}' | python3 .claude/hooks/enforce_agent_usage.py
+
+# Test the session start hook
+./session_start.sh
 ```
 
-### Configuration
+## Best Practices
 
-The hook configuration is defined in `config.json` and includes:
-- Hook enablement status
-- Timeout settings (30 seconds default)
-- Error handling strategy (continue on error)
-- Logging configuration
+1. **Fail Open**: On errors, allow the action to proceed (exit 0)
+2. **Clear Messages**: Provide helpful error messages via stderr
+3. **Fast Execution**: Keep timeouts short (5-30 seconds)
+4. **Executable Permissions**: Ensure all hook scripts are executable
+5. **Error Handling**: Wrap logic in try/catch to prevent crashes
 
-### Environment Variables Required
+## Adding New Hooks
 
-The following environment variables should be set for Neo4j connection:
-- `NEO4J_URI`: Connection URI (default: neo4j://127.0.0.1:7687)
-- `NEO4J_USER`: Username (default: neo4j)
-- `NEO4J_PASSWORD`: Password (required, no default)
-- `NEO4J_DB`: Database name (default: memory)
+1. Create the hook script in this directory
+2. Make it executable: `chmod +x script.py`
+3. Add configuration to `.claude/settings.json`
+4. Test the hook manually before use
 
-### Hook Execution Flow
+## Supported Hook Events
 
-1. Claude session starts in the project directory
-2. Claude checks for `.claude/hooks/config.json`
-3. If SessionStart hook is enabled, executes `session-start/session-start.py`
-4. Hook directly imports server components and initializes repository
-5. Repository is scanned and all files are indexed with embeddings
-6. Claude receives success confirmation with statistics
-7. Repository monitoring and semantic search are immediately available
+- **PreToolUse**: Before any tool is executed
+- **PostToolUse**: After a tool completes
+- **SessionStart**: When a Claude session begins
+- **UserPromptSubmit**: When user submits a prompt
+- **Stop**: When session stops
+- **SubagentStop**: When a subagent stops
+- **PreCompact**: Before conversation compaction
+- **Notification**: For notifications
 
-### Performance
+## Troubleshooting
 
-- **Direct initialization**: ~2-3 seconds for typical repository
-- **67 files indexed**: ~2 seconds (including embeddings generation)
-- **Fallback to manual**: Only if direct initialization fails
-
-### Troubleshooting
-
-If the hook fails:
-1. Check that Neo4j environment variables are set
-2. Ensure Neo4j Desktop is running  
-3. Verify the MCP server is properly configured
-4. Check `.claude/hooks/logs/` for detailed error messages
-5. Look for `.claude/.last_auto_init` for last initialization result
-
-### Files in this directory
-
-- `session-start/session-start.py`: Enhanced SessionStart hook with direct initialization
-- `utils/hook_output.py`: Utility module for formatting hook outputs
-- `config.json`: Hook configuration file
-- `README.md`: This documentation file
-- `logs/`: Directory for detailed session logs (created at runtime)
-- `.last_auto_init`: Marker file with last initialization result (created at runtime)
+If hooks aren't working:
+1. Check file permissions (`ls -la`)
+2. Verify JSON configuration syntax
+3. Test hooks manually with sample input
+4. Check Claude Code logs for errors
+5. Ensure `$CLAUDE_PROJECT_DIR` is set correctly

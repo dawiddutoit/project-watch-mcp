@@ -215,6 +215,28 @@ class RepositoryMonitor:
 
         return False
 
+    def _should_skip_directory(self, dir_path: Path) -> bool:
+        """Check if a directory should be skipped entirely."""
+        # Always skip these directories
+        skip_dirs = {'.git', '.idea', '__pycache__', 'node_modules', '.venv', 'venv', 'env', '.ruff_cache', '.mypy_cache', '.pytest_cache'}
+        
+        # Check if any parent or the directory itself is in skip list
+        for part in dir_path.parts:
+            if part in skip_dirs:
+                return True
+                
+        # Check gitignore patterns for directories
+        if self.gitignore_spec:
+            try:
+                relative_path = dir_path.relative_to(self.repo_path)
+                # Add trailing slash for directory matching in gitignore
+                if self.gitignore_spec.match_file(str(relative_path) + '/'):
+                    return True
+            except ValueError:
+                pass
+                
+        return False
+
     async def scan_repository(self) -> list[FileInfo]:
         """
         Scan the repository and return information about all matching files.
@@ -223,38 +245,60 @@ class RepositoryMonitor:
             List of FileInfo objects for matching files
         """
         files = []
-
-        for file_path in self.repo_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-
-            if not self._should_include_file(file_path):
-                continue
-
+        
+        # Use a stack for iterative directory traversal to avoid recursing into ignored dirs
+        dirs_to_scan = [self.repo_path]
+        
+        while dirs_to_scan:
+            current_dir = dirs_to_scan.pop()
+            
             try:
-                stat = file_path.stat()
-                files.append(
-                    FileInfo(
-                        path=file_path,
-                        size=stat.st_size,
-                        last_modified=datetime.fromtimestamp(stat.st_mtime),
-                    )
-                )
-            except OSError as e:
-                logger.warning(f"Could not stat file {file_path}: {e}")
+                for item in current_dir.iterdir():
+                    if item.is_dir():
+                        # Skip directories that should be ignored
+                        if not self._should_skip_directory(item):
+                            dirs_to_scan.append(item)
+                    elif item.is_file():
+                        # Check if file should be included
+                        if self._should_include_file(item):
+                            try:
+                                stat = item.stat()
+                                files.append(
+                                    FileInfo(
+                                        path=item,
+                                        size=stat.st_size,
+                                        last_modified=datetime.fromtimestamp(stat.st_mtime),
+                                    )
+                                )
+                            except OSError as e:
+                                logger.warning(f"Could not stat file {item}: {e}")
+            except PermissionError as e:
+                logger.debug(f"Permission denied accessing {current_dir}: {e}")
+                continue
 
         logger.info(f"Scanned repository: found {len(files)} matching files")
         return files
 
-    async def start(self):
-        """Start monitoring the repository for changes."""
+    async def start(self, daemon: bool = False):
+        """
+        Start monitoring the repository for changes.
+        
+        Args:
+            daemon: If True, the monitoring task will continue running 
+                   even after the main process exits (not fully daemonized,
+                   but allows the task to persist in the event loop)
+        """
         if self.is_running:
             logger.warning("Monitor is already running")
             return
 
         self.is_running = True
         self._watch_task = asyncio.create_task(self._watch_loop())
-        logger.info(f"Started monitoring repository: {self.repo_path}")
+        
+        # Set the task name for easier debugging
+        self._watch_task.set_name(f"monitor_{self.project_name}")
+        
+        logger.info(f"Started monitoring repository: {self.repo_path} (daemon={daemon})")
 
     async def stop(self):
         """Stop monitoring the repository."""

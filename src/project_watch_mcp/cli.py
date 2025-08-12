@@ -4,22 +4,88 @@ import argparse
 import asyncio
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
 from neo4j import AsyncGraphDatabase
 
 from .config import EmbeddingConfig, ProjectConfig
+from .core import RepositoryInitializer
 from .neo4j_rag import Neo4jRAG
 from .repository_monitor import RepositoryMonitor
 from .server import create_mcp_server
 from .utils.embedding import create_embeddings_provider
 
-# Configure logging
+# Configure logging - default to WARNING to reduce verbosity
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+async def initialize_only(
+    neo4j_uri: str,
+    neo4j_user: str,
+    neo4j_password: str,
+    neo4j_database: str,
+    repository_path: str,
+    project_name: str | None = None,
+    verbose: bool = False,
+) -> int:
+    """
+    Initialize repository without starting the server.
+
+    Args:
+        neo4j_uri: Neo4j connection URI
+        neo4j_user: Neo4j username
+        neo4j_password: Neo4j password
+        neo4j_database: Neo4j database name
+        repository_path: Path to repository to monitor
+        project_name: Optional project name for context isolation
+        verbose: Enable verbose progress reporting
+
+    Returns:
+        Exit code: 0 for success, 1 for failure
+    """
+    try:
+        repo_path = Path(repository_path)
+        if not project_name:
+            project_name = repo_path.name
+
+        # Progress callback for verbose mode
+        def progress_callback(percentage: float, message: str):
+            if verbose:
+                print(f"[{percentage:3.0f}%] {message}", file=sys.stderr)
+
+        # Create initializer
+        initializer = RepositoryInitializer(
+            neo4j_uri=neo4j_uri,
+            neo4j_user=neo4j_user,
+            neo4j_password=neo4j_password,
+            neo4j_database=neo4j_database,
+            repository_path=repo_path,
+            project_name=project_name,
+            progress_callback=progress_callback if verbose else None,
+        )
+
+        # Run initialization with persistent monitoring
+        async with initializer:
+            result = await initializer.initialize(persistent_monitoring=True)
+
+        # Print clean, simple result
+        print(f"Project: {project_name}")
+        print(f"Indexed: {result.indexed}/{result.total} files")
+        if result.skipped:
+            print(f"Skipped: {len(result.skipped)} files")
+        print(f"Monitoring: {'started' if result.monitoring else 'not started'}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Initialization failed: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 async def main(
@@ -51,9 +117,9 @@ async def main(
         path: HTTP/SSE server path
         file_patterns: Comma-separated file patterns to monitor
     """
-    logger.info("Starting Project Watch MCP Server")
-    logger.info(f"Repository: {repository_path}")
-    logger.info(f"Neo4j URI: {neo4j_uri}")
+    logger.debug("Starting Project Watch MCP Server")
+    logger.debug(f"Repository: {repository_path}")
+    logger.debug(f"Neo4j URI: {neo4j_uri}")
 
     # Parse file patterns
     patterns = [p.strip() for p in file_patterns.split(",")]
@@ -66,7 +132,7 @@ async def main(
     # Verify connection
     try:
         await neo4j_driver.verify_connectivity()
-        logger.info(f"Connected to Neo4j at {neo4j_uri}")
+        logger.debug(f"Connected to Neo4j at {neo4j_uri}")
     except Exception as e:
         logger.error(f"Failed to connect to Neo4j: {e}")
         logger.error("Make sure Neo4j is running and accessible")
@@ -80,7 +146,7 @@ async def main(
         project_config = ProjectConfig(name=project_name, repository_path=Path(repository_path))
     else:
         project_config = ProjectConfig.from_repository_path(Path(repository_path))
-    logger.info(f"Project name: {project_config.name}")
+    logger.debug(f"Project name: {project_config.name}")
 
     # Create repository monitor with project context
     repository_monitor = RepositoryMonitor(
@@ -89,7 +155,7 @@ async def main(
         neo4j_driver=neo4j_driver,
         file_patterns=patterns,
     )
-    logger.info("Repository monitor created")
+    logger.debug("Repository monitor created")
 
     # Create embeddings configuration from environment
     embedding_config = EmbeddingConfig.from_env()
@@ -103,7 +169,7 @@ async def main(
         dimension=embedding_config.dimension,
     )
 
-    logger.info(f"Using {embedding_config.provider} embeddings provider")
+    logger.debug(f"Using {embedding_config.provider} embeddings provider")
 
     # Create Neo4j RAG system with project context
     neo4j_rag = Neo4jRAG(
@@ -114,7 +180,7 @@ async def main(
         chunk_overlap=20,  # Overlapping lines
     )
     await neo4j_rag.initialize()
-    logger.info("Neo4j RAG system initialized")
+    logger.debug("Neo4j RAG system initialized")
 
     # Create MCP server with project context
     mcp = create_mcp_server(
@@ -122,21 +188,21 @@ async def main(
         neo4j_rag=neo4j_rag,
         project_name=project_config.name,
     )
-    logger.info("MCP server created")
+    logger.debug("MCP server created")
 
     # Run the server
-    logger.info(f"Starting server with transport: {transport}")
+    logger.debug(f"Starting server with transport: {transport}")
 
     try:
         match transport:
             case "http":
-                logger.info(f"HTTP server starting on {host}:{port}{path}")
+                logger.debug(f"HTTP server starting on {host}:{port}{path}")
                 await mcp.run_http_async(host=host, port=port, path=path, stateless_http=True)
             case "stdio":
-                logger.info("STDIO server starting")
+                logger.debug("STDIO server starting")
                 await mcp.run_stdio_async()
             case "sse":
-                logger.info(f"SSE server starting on {host}:{port}{path}")
+                logger.debug(f"SSE server starting on {host}:{port}{path}")
                 await mcp.run_sse_async(host=host, port=port, path=path)
             case _:
                 raise ValueError(f"Unsupported transport: {transport}")
@@ -233,6 +299,13 @@ Embedding Provider Configuration:
         help="Comma-separated file patterns to monitor (default: common code files)",
     )
 
+    # Initialization mode
+    parser.add_argument(
+        "--initialize",
+        action="store_true",
+        help="Initialize repository and exit (mutually exclusive with --transport)",
+    )
+
     # Server arguments
     parser.add_argument(
         "--transport",
@@ -268,9 +341,17 @@ Embedding Provider Configuration:
 
     args = parser.parse_args()
 
-    # Set logging level
+    # Set logging level based on verbose flag
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("project_watch_mcp").setLevel(logging.DEBUG)
+    else:
+        # Keep default WARNING level for non-verbose mode
+        logging.getLogger().setLevel(logging.WARNING)
+
+    # Check for mutually exclusive options
+    if args.initialize and args.transport:
+        parser.error("--initialize and --transport are mutually exclusive")
 
     # Get configuration from environment variables or defaults
     neo4j_uri = args.neo4j_uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -278,9 +359,13 @@ Embedding Provider Configuration:
     neo4j_password = args.neo4j_password or os.getenv("NEO4J_PASSWORD", "password")
     neo4j_database = args.neo4j_database or os.getenv("NEO4J_DATABASE", "neo4j")
 
-    repository_path = args.repository or os.getenv("REPOSITORY_PATH")
-    if not repository_path:
-        parser.error("--repository is required (or set REPOSITORY_PATH environment variable)")
+    # For initialization mode, use current directory if no repository specified
+    if args.initialize:
+        repository_path = args.repository or os.getenv("REPOSITORY_PATH", ".")
+    else:
+        repository_path = args.repository or os.getenv("REPOSITORY_PATH")
+        if not repository_path:
+            parser.error("--repository is required (or set REPOSITORY_PATH environment variable)")
 
     project_name = args.project_name or os.getenv("PROJECT_NAME")
 
@@ -300,23 +385,39 @@ Embedding Provider Configuration:
     port = args.port or int(os.getenv("MCP_PORT", "8000"))
     path = args.path or os.getenv("MCP_PATH", "/mcp/")
 
-    # Run the server
+    # Run in the appropriate mode
     try:
-        asyncio.run(
-            main(
-                neo4j_uri=neo4j_uri,
-                neo4j_user=neo4j_user,
-                neo4j_password=neo4j_password,
-                neo4j_database=neo4j_database,
-                repository_path=str(repo_path.absolute()),
-                project_name=project_name,
-                transport=transport,
-                host=host,
-                port=port,
-                path=path,
-                file_patterns=file_patterns,
+        if args.initialize:
+            # Run initialization only
+            exit_code = asyncio.run(
+                initialize_only(
+                    neo4j_uri=neo4j_uri,
+                    neo4j_user=neo4j_user,
+                    neo4j_password=neo4j_password,
+                    neo4j_database=neo4j_database,
+                    repository_path=str(repo_path.absolute()),
+                    project_name=project_name,
+                    verbose=args.verbose,
+                )
             )
-        )
+            sys.exit(exit_code)
+        else:
+            # Run the server
+            asyncio.run(
+                main(
+                    neo4j_uri=neo4j_uri,
+                    neo4j_user=neo4j_user,
+                    neo4j_password=neo4j_password,
+                    neo4j_database=neo4j_database,
+                    repository_path=str(repo_path.absolute()),
+                    project_name=project_name,
+                    transport=transport,
+                    host=host,
+                    port=port,
+                    path=path,
+                    file_patterns=file_patterns,
+                )
+            )
     except KeyboardInterrupt:
         logger.info("\nShutting down gracefully...")
     except Exception as e:

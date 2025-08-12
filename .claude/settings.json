@@ -2,11 +2,28 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "python /Users/dawiddutoit/projects/play/project-watch-mcp/.claude/hooks/session-start/session-start.py"
+            "command": "uv run project-watch-mcp --initialize",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python ./.claude/hooks/session-start.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/hooks/enforce_agent_usage.py",
+            "timeout": 5
           }
         ]
       }

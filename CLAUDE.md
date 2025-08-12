@@ -1,93 +1,36 @@
 # CLAUDE.md
 
-Project Watch MCP - Neo4j-based code indexing and search MCP server.
+## Project Overview
 
-## Quick Facts
-- **Version**: 0.1.0  
-- **Python**: 3.11+  
-- **Package Manager**: `uv` (required)
-- **Database**: Neo4j 5.11+ (local instance via Neo4j Desktop, NOT Docker)
+**Project Watch MCP** - A Model Context Protocol (MCP) server that provides real-time code indexing and semantic search capabilities using Neo4j graph database.
 
-⚠️ **Known Issue**: Semantic search currently uses mock embeddings - see todo.md for details
+### Key Features
+- Real-time repository monitoring and indexing
+- Semantic search using OpenAI embeddings
+- Neo4j graph database for code relationship mapping
+- MCP server integration for Claude CLI
+- Automatic session initialization
 
-## Environment Setup
 
-Neo4j connection via shell environment variables:
-- `NEO4J_URI`: neo4j://127.0.0.1:7687
-- `NEO4J_USER`: neo4j  
-- `NEO4J_PASSWORD`: (set in shell)
-- `NEO4J_DB`: memory
+## 🚨 ABSOLUTE CRITICAL INSTRUCTION 🚨
 
-## Project Structure
-```
-src/project_watch_mcp/     # Main package
-.claude/agents/            # Agent definitions  
-tests/                     # Test files
-```
+Key agents for this project:
+- `@agent-project-context-expert` - Project info, conventions, commands
+- `@agent-project-memory-navigator` - Find files, search code
+- `@agent-project-todo-orchestrator` - Manage tasks and todos
+  The above three agents are critical for any work you do in this project. If you work without using them, your session will be stopped.
+  
+- **YOU MUST ALWAYS USE `.claude/commands/available-agents.md` TO FIND THE RIGHT AGENT FOR ANY TASK**
+- **DO NOT** handle tasks or updates or searches directly or any work, use an agent.  
+- **ALWAYS** check available-agents.md first for a suitable agent
+- **ALWAYS** delegate to the appropriate agent
 
-## Critical Agent Usage Requirements
+📍 **Single Source of Truth**: `.claude/commands/available-agents.md`
 
-**MANDATORY: Always use these specialized agents for their domains:**
+This file contains:
+- Complete list of all available agents
+- Agent specializations and when to use them
+- Proper workflow sequence for tasks
+- Correct @agent- naming conventions
 
-### 1. project-context-expert
-- **ALWAYS USE FOR**: Project questions, configuration, setup, patterns, conventions
-- **Definition**: `.claude/agents/project-context-expert.md`
-- **Example**: "What testing framework does this project use?", "How is the project structured?"
-
-### 2. project-memory-navigator  
-- **ALWAYS USE FOR**: File discovery, code search, navigation, locating elements
-- **Definition**: `.claude/agents/project-memory-navigator.md`
-- **Example**: "Find the server.py file", "Where is the RepositoryMonitor class?"
-
-### 3. project-todo-orchestrator
-- **ALWAYS USE FOR**: Task management, todo creation/updates, work coordination
-- **Definition**: `.claude/agents/project-todo-orchestrator.md`
-- **Example**: "Create todos for this feature", "Update task status", "Organize work items"
-
-## Development Commands
-
-```bash
-# Install/update dependencies
-uv sync
-
-# Run tests
-uv run pytest
-
-# Format code
-uv run black src tests
-
-# Lint code  
-uv run ruff check src tests
-
-# Start server
-uv run project-watch-mcp --repository .
-```
-
-## Usage Examples
-
-```python
-# Project context and conventions
-Task(
-    subagent_type="project-context-expert",
-    prompt="What testing framework should I use?"
-)
-
-# File search and navigation
-Task(
-    subagent_type="project-memory-navigator",
-    prompt="find the server.py file"
-)
-
-# Task management
-Task(
-    subagent_type="project-todo-orchestrator",
-    prompt="create todos for implementing new search feature"
-)
-```
-
-## Important Instructions
-
-- **DO NOT** attempt to handle file search, project context, or task management directly
-- **ALWAYS** delegate to the appropriate agent based on the domain
-- These agents have specialized knowledge and tools that the main context lacks
-- Using agents reduces context usage and improves accuracy
+**NEVER attempt any work yourself use available-agents.md to identify the correct agent and delegate to them**

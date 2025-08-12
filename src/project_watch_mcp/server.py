@@ -1,6 +1,7 @@
 """FastMCP server for repository monitoring with RAG capabilities."""
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -17,6 +18,7 @@ from .repository_monitor import FileInfo, RepositoryMonitor
 try:
     from radon.complexity import cc_rank, cc_visit
     from radon.metrics import mi_visit
+
     RADON_AVAILABLE = True
 except ImportError:
     RADON_AVAILABLE = False
@@ -95,41 +97,36 @@ def create_mcp_server(
               .sh, .yaml, .yml, .toml, .json, .xml, .html, .css, .scss, .md, .txt
         """
         try:
-            # Scan repository for files
-            files = await repository_monitor.scan_repository()
+            # Use the core initializer
+            from .core.initializer import RepositoryInitializer
 
-            # Index each file
-            indexed_count = 0
-            for file_info in files:
-                try:
-                    # Read file content
-                    content = file_info.path.read_text(encoding="utf-8")
+            # Get Neo4j configuration from environment (same as used in server setup)
+            neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
+            neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+            neo4j_password = os.getenv("NEO4J_PASSWORD")
+            neo4j_database = os.getenv("NEO4J_DB", os.getenv("NEO4J_DATABASE", "memory"))
 
-                    # Create CodeFile object with project context
-                    code_file = CodeFile(
-                        project_name=project_name,
-                        path=file_info.path,
-                        content=content,
-                        language=file_info.language,
-                        size=file_info.size,
-                        last_modified=file_info.last_modified,
-                    )
+            if not neo4j_password:
+                raise ToolError("NEO4J_PASSWORD not set in environment")
 
-                    # Index in Neo4j
-                    await neo4j_rag.index_file(code_file)
-                    indexed_count += 1
+            # Create initializer and run initialization
+            # Use repository_monitor's path and project_name from closure
+            initializer = RepositoryInitializer(
+                neo4j_uri=neo4j_uri,
+                neo4j_user=neo4j_user,
+                neo4j_password=neo4j_password,
+                neo4j_database=neo4j_database,
+                repository_path=repository_monitor.repo_path,
+                project_name=project_name,  # This comes from the create_mcp_server function parameter
+            )
 
-                except Exception as e:
-                    logger.error(f"Failed to index {file_info.path}: {e}")
+            async with initializer:
+                result = await initializer.initialize(persistent_monitoring=True)
 
-            # Start monitoring
-            await repository_monitor.start()
-
-            result_text = f"Repository initialized. Indexed {indexed_count}/{len(files)} files."
-
+            # Format result for MCP tool
             return ToolResult(
-                content=[TextContent(type="text", text=result_text)],
-                structured_content={"indexed": indexed_count, "total": len(files)},
+                content=[TextContent(type="text", text=result.message)],
+                structured_content=result.to_dict(),
             )
 
         except Exception as e:
@@ -601,7 +598,8 @@ def create_mcp_server(
     )
     async def delete_file(
         file_path: str = Field(
-            ..., description="Path to the file to delete from index (relative from repo root or absolute)"
+            ...,
+            description="Path to the file to delete from index (relative from repo root or absolute)",
         )
     ) -> ToolResult:
         """
@@ -676,7 +674,7 @@ def create_mcp_server(
                     structured_content={
                         "status": "warning",
                         "message": "File not found in index",
-                        "file": str(path)
+                        "file": str(path),
                     },
                 )
 
@@ -685,7 +683,9 @@ def create_mcp_server(
             # Delete from Neo4j
             await neo4j_rag.delete_file(path)
 
-            result_text = f"Successfully deleted {file_path} from index ({chunks_count} chunks removed)"
+            result_text = (
+                f"Successfully deleted {file_path} from index ({chunks_count} chunks removed)"
+            )
 
             return ToolResult(
                 content=[TextContent(type="text", text=result_text)],
@@ -693,7 +693,7 @@ def create_mcp_server(
                     "status": "success",
                     "message": "File removed from index",
                     "file": str(path),
-                    "chunks_removed": chunks_count
+                    "chunks_removed": chunks_count,
                 },
             )
 
@@ -712,12 +712,12 @@ def create_mcp_server(
     )
     async def analyze_complexity(
         file_path: str = Field(
-            ..., description="Path to the Python file to analyze (relative from repo root or absolute)"
+            ...,
+            description="Path to the Python file to analyze (relative from repo root or absolute)",
         ),
         include_metrics: bool = Field(
-            default=True,
-            description="Include additional metrics like maintainability index"
-        )
+            default=True, description="Include additional metrics like maintainability index"
+        ),
     ) -> ToolResult:
         """
         Calculate cyclomatic complexity for Python files.
@@ -815,7 +815,7 @@ def create_mcp_server(
             if not path.exists():
                 raise ToolError(f"File {file_path} does not exist")
 
-            if not str(path).endswith('.py'):
+            if not str(path).endswith(".py"):
                 raise ToolError(f"File {file_path} is not a Python file (.py extension required)")
 
             # Read file content
@@ -842,14 +842,16 @@ def create_mcp_server(
                 else:
                     classification = "very-complex"
 
-                functions.append({
-                    "name": item.name,
-                    "complexity": complexity,
-                    "rank": cc_rank(complexity),
-                    "line": item.lineno,
-                    "classification": classification,
-                    "type": item.__class__.__name__.lower()  # 'function' or 'method'
-                })
+                functions.append(
+                    {
+                        "name": item.name,
+                        "complexity": complexity,
+                        "rank": cc_rank(complexity),
+                        "line": item.lineno,
+                        "classification": classification,
+                        "type": item.__class__.__name__.lower(),  # 'function' or 'method'
+                    }
+                )
 
             # Sort functions by complexity (highest first)
             functions.sort(key=lambda x: x["complexity"], reverse=True)
@@ -861,7 +863,7 @@ def create_mcp_server(
             summary = {
                 "total_complexity": total_complexity,
                 "average_complexity": round(avg_complexity, 2),
-                "function_count": len(functions)
+                "function_count": len(functions),
             }
 
             # Add maintainability index if requested
@@ -899,9 +901,7 @@ def create_mcp_server(
                     )
 
             if complex_functions:
-                recommendations.append(
-                    f"{len(complex_functions)} function(s) have complexity > 10"
-                )
+                recommendations.append(f"{len(complex_functions)} function(s) have complexity > 10")
 
             if avg_complexity > 10:
                 recommendations.append(
@@ -941,8 +941,8 @@ def create_mcp_server(
                     "file": str(path.relative_to(repository_monitor.repo_path)),
                     "summary": summary,
                     "functions": functions[:20],  # Limit to top 20 for response size
-                    "recommendations": recommendations
-                }
+                    "recommendations": recommendations,
+                },
             )
 
         except SyntaxError as e:

@@ -168,31 +168,55 @@ class TestMCPIntegration:
 
     async def test_initialize_repository_with_project_context(self, mcp_server_setup):
         """Test that initialize_repository tool respects project context."""
+        from unittest.mock import patch, AsyncMock
+        from src.project_watch_mcp.core.initializer import InitializationResult
+        
         server = mcp_server_setup["server"]
         driver = mcp_server_setup["driver"]
         project_name = mcp_server_setup["project_name"]
+        repo_path = mcp_server_setup["repo_path"]
 
         # Get the initialize_repository tool
         tools = await server.get_tools()
         assert "initialize_repository" in tools, "initialize_repository tool not found"
         init_tool = tools["initialize_repository"]
 
-        # Execute the tool
-        result = await init_tool.run({})
-
-        # Verify files were indexed with correct project context
-        assert project_name in driver._indexed_files
-        indexed_files = driver._indexed_files[project_name]
-
-        # Should have indexed Python files from the repository
-        assert len(indexed_files) > 0
-
-        # Verify result indicates success
-        assert result is not None
-        if hasattr(result, "content") and result.content:
-            # result.content is a list of content objects
-            text_content = result.content[0].text if hasattr(result.content[0], "text") else str(result.content[0])
-            assert "initialized" in text_content.lower() or "indexed" in text_content.lower()
+        # Mock the RepositoryInitializer to use our test driver
+        mock_result = InitializationResult(
+            indexed=4,
+            total=4,
+            skipped=[],
+            monitoring=True,
+            message="Repository initialized. Indexed 4/4 files."
+        )
+        
+        with patch('src.project_watch_mcp.core.initializer.RepositoryInitializer') as MockInitializer:
+            mock_initializer_instance = AsyncMock()
+            mock_initializer_instance.initialize = AsyncMock(return_value=mock_result)
+            mock_initializer_instance.__aenter__ = AsyncMock(return_value=mock_initializer_instance)
+            mock_initializer_instance.__aexit__ = AsyncMock(return_value=None)
+            MockInitializer.return_value = mock_initializer_instance
+            
+            # Execute the tool
+            result = await init_tool.run({})
+            
+            # Verify the initializer was called with correct parameters
+            MockInitializer.assert_called_once()
+            call_args = MockInitializer.call_args
+            assert call_args.kwargs["project_name"] == project_name
+            assert call_args.kwargs["repository_path"] == repo_path
+            
+            # Verify result indicates success
+            assert result is not None
+            if hasattr(result, "content") and result.content:
+                # result.content is a list of content objects
+                text_content = result.content[0].text if hasattr(result.content[0], "text") else str(result.content[0])
+                assert "initialized" in text_content.lower() or "indexed" in text_content.lower()
+            
+            # Verify structured content
+            if hasattr(result, "structured_content"):
+                assert result.structured_content["indexed"] == 4
+                assert result.structured_content["total"] == 4
 
     async def test_search_code_tool_with_project_context(self, mcp_server_setup):
         """Test that search_code tool includes project context."""

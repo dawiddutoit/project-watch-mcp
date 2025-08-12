@@ -147,12 +147,72 @@ If no `.gitignore` file exists, the monitor falls back to sensible defaults (exc
 
 ## Usage Examples
 
+### Repository Initialization
+
+The `--initialize` flag allows you to index your repository directly from the command line without starting the MCP server. This is useful for:
+- Pre-indexing repositories before using MCP clients
+- Batch processing multiple repositories
+- CI/CD pipelines
+- Testing and debugging indexing issues
+
+#### Basic Initialization
+```bash
+# Initialize the current directory
+uv run project-watch-mcp --initialize
+
+# Initialize a specific repository
+uv run project-watch-mcp --initialize --repository /path/to/repo
+```
+
+#### Initialization with Verbose Output
+```bash
+# See detailed progress during initialization
+uv run project-watch-mcp --initialize --verbose
+```
+
+#### Initialization with Custom Configuration
+```bash
+# Initialize with specific Neo4j connection
+uv run project-watch-mcp --initialize \
+  --repository /path/to/repo \
+  --neo4j-uri bolt://myserver:7687 \
+  --neo4j-password mypassword \
+  --verbose
+
+# Initialize with custom project name
+uv run project-watch-mcp --initialize \
+  --repository /path/to/repo \
+  --project-name my-awesome-project \
+  --verbose
+
+# Initialize with specific file patterns
+uv run project-watch-mcp --initialize \
+  --repository /path/to/repo \
+  --file-patterns "*.py,*.js,*.ts" \
+  --verbose
+```
+
+#### When to Use CLI Initialization vs MCP Tool
+
+**Use `--initialize` CLI flag when:**
+- Setting up a new repository for the first time
+- Running batch initialization for multiple repositories
+- Integrating with CI/CD pipelines
+- Debugging indexing issues (with `--verbose`)
+- Pre-indexing before starting the MCP server
+
+**Use `initialize_repository` MCP tool when:**
+- Already connected through an MCP client
+- Need to re-index after significant changes
+- Part of an automated workflow within Claude or another MCP client
+- Want to trigger initialization programmatically
+
 ### Basic Usage (STDIO Mode for MCP Clients)
 ```bash
-# Monitor current repository
+# Monitor current repository (without initialization)
 project-watch-mcp --repository .
 
-# Monitor specific repository
+# Monitor specific repository (without initialization)
 project-watch-mcp --repository /path/to/repo
 ```
 
@@ -212,11 +272,13 @@ project-watch-mcp
 ## Command-Line Options
 
 ```
+--initialize             Initialize repository index and exit (no server)
 --neo4j-uri URI           Neo4j connection URI (default: bolt://localhost:7687)
 --neo4j-user USER         Neo4j username (default: neo4j)
 --neo4j-password PASS     Neo4j password (default: password)
 --neo4j-database DB       Neo4j database name (default: neo4j)
---repository, -r PATH     Path to repository to monitor (required)
+--repository, -r PATH     Path to repository to monitor (default: current directory)
+--project-name NAME       Custom project name for Neo4j (default: derived from path)
 --file-patterns, -p PATS  Comma-separated file patterns (default: common code files)
 --transport, -t TYPE      Transport type: stdio, http, sse (default: stdio)
 --host HOST              HTTP/SSE server host (default: 127.0.0.1)
@@ -460,18 +522,34 @@ Check the current repository monitoring status.
 
 ## Architecture
 
-The system consists of four main components:
+The system is built with a modular architecture consisting of five main components:
 
-1. **Repository Monitor**: Watches for file changes using `watchfiles`
+1. **Core Module** (`src/project_watch_mcp/core/`): Shared business logic
+   - `neo4j_rag.py`: Neo4j database operations and RAG functionality
+   - `repository_monitor.py`: File system monitoring with gitignore support
+   - `__init__.py`: Module exports and initialization
+
+2. **Repository Monitor**: Watches for file changes using `watchfiles`
    - Automatically loads and respects `.gitignore` patterns
    - Falls back to sensible defaults if no `.gitignore` exists
    - Supports additional custom ignore patterns
-2. **Neo4j RAG**: Manages code indexing and retrieval with Neo4j
-3. **Embedding Provider**: Generates vector representations for semantic search
+
+3. **Neo4j RAG**: Manages code indexing and retrieval with Neo4j
+   - Vector indexing for semantic search
+   - Code chunking and metadata extraction
+   - Efficient graph-based storage and retrieval
+
+4. **Embedding Provider**: Generates vector representations for semantic search
    - OpenAI: Cloud-based, high-quality embeddings
    - Local: Self-hosted embedding server
    - Mock: Deterministic embeddings for testing
-4. **MCP Server**: Exposes functionality through MCP tools
+
+5. **MCP Server**: Exposes functionality through MCP tools
+   - FastMCP-based implementation
+   - Supports STDIO, HTTP, and SSE transports
+   - Provides 8 specialized tools for code analysis
+
+The modular design allows the core functionality to be used both through the MCP server and directly via the CLI, enabling flexible integration patterns.
 
 ## Troubleshooting
 

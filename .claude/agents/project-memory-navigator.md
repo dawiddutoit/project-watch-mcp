@@ -44,6 +44,13 @@ You have access to MCP tools for project navigation. Key tools include:
 - Memory recall for previous discoveries
 - Neo4j RAG system queries for semantic code search
 
+**Agent Coordination:**
+Reference `.claude/commands/available-agents.md` for delegating specialized tasks:
+- @agent-project-context-expert for project conventions and patterns
+- @agent-project-todo-orchestrator for task management updates
+- Development/architecture agents for implementation guidance
+- See available-agents.md for complete agent list
+
 **Response Format:**
 Structure your responses clearly:
 ```
