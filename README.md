@@ -1,6 +1,6 @@
 # Project Watch MCP
 
-Repository monitoring MCP server that creates a Neo4j-based RAG (Retrieval-Augmented Generation) system for your codebase with intelligent file filtering.
+Advanced repository monitoring MCP server with Neo4j-based RAG system, featuring native vector search, multi-language detection, and language-specific complexity analysis.
 
 ## Prerequisites
 
@@ -12,14 +12,20 @@ Repository monitoring MCP server that creates a Neo4j-based RAG (Retrieval-Augme
 
 ## Features
 
+### Core Features
 - **Real-time Repository Monitoring**: Uses `watchfiles` library to detect file changes
 - **Neo4j-based RAG System**: Stores code chunks with embeddings for semantic search
 - **FastMCP Server**: Provides MCP tools for querying the repository knowledge base
-- **Multi-language Support**: Automatically detects and indexes various programming languages
-- **Semantic Search**: Find code by meaning, not just text matching
-- **Pattern Search**: Support for regex and text-based pattern matching
 - **Gitignore Support**: Automatically respects `.gitignore` patterns to exclude files from monitoring
-- **Multiple Embedding Providers**: Support for OpenAI, local, and mock embeddings
+
+### Advanced Features (New!)
+- **Neo4j Native Vector Search**: Eliminates Lucene escaping issues with direct vector similarity
+- **Multi-Language Detection**: Hybrid detection using tree-sitter, Pygments, and file extensions
+- **Language-Specific Complexity Analysis**: Cyclomatic and cognitive complexity for Python, Java, and Kotlin
+- **Embedding Enrichment**: Language-aware embedding adjustments for better search accuracy
+- **Performance Caching**: Efficient caching layers for detection and analysis results
+
+See [Advanced Features Documentation](docs/advanced_features.md) for detailed information.
 
 ## Quick Neo4j Setup
 
@@ -90,9 +96,40 @@ Set the following environment variables:
 - `REPOSITORY_PATH`: Path to repository to monitor (default: current directory)
 - `FILE_PATTERNS`: Comma-separated file patterns to monitor (default: common code files)
 
+### Advanced Configuration
+
+#### Neo4j Native Vector Search
+Configure Neo4j to use native vector indexes instead of Lucene:
+
+```bash
+# Enable native vector search
+export NEO4J_VECTOR_INDEX_ENABLED=true
+export VECTOR_SIMILARITY_METRIC=cosine  # or euclidean
+```
+
+#### Language Detection
+Configure the hybrid language detection system:
+
+```bash
+# Language detection settings
+export LANGUAGE_DETECTION_CACHE_SIZE=1000
+export LANGUAGE_DETECTION_CACHE_TTL=3600
+export LANGUAGE_CONFIDENCE_THRESHOLD=0.85
+```
+
+#### Complexity Analysis
+Configure complexity thresholds and analysis behavior:
+
+```bash
+# Complexity thresholds
+export COMPLEXITY_THRESHOLD_HIGH=10
+export COMPLEXITY_THRESHOLD_VERY_HIGH=20
+export COMPLEXITY_INCLUDE_METRICS=true
+```
+
 ### Embedding Provider Configuration
 
-The system supports three embedding providers for semantic search:
+The system supports multiple embedding providers for semantic search:
 
 #### 1. Mock Provider (Default)
 For testing and development without external dependencies:
@@ -144,6 +181,42 @@ The repository monitor automatically uses the project's `.gitignore` file to det
 - Any custom patterns in your `.gitignore` are respected
 
 If no `.gitignore` file exists, the monitor falls back to sensible defaults (excluding common directories like `node_modules`, `.venv`, `__pycache__`, etc.).
+
+## Quick Start with Advanced Features
+
+### Example: Find Complex Authentication Code
+
+```python
+# Initialize with all advanced features
+await initialize_repository()
+
+# Search for authentication code using native vectors
+results = await search_code(
+    query="user authentication JWT validation",
+    search_type="semantic",
+    language="python"  # Language-filtered search
+)
+
+# Analyze complexity of found files
+for result in results[:5]:
+    complexity = await analyze_complexity(
+        file_path=result["file"],
+        include_metrics=True
+    )
+    
+    print(f"\nFile: {result['file']}")
+    print(f"  Similarity: {result['similarity']:.2f}")
+    print(f"  Complexity Grade: {complexity['summary']['complexity_grade']}")
+    print(f"  Maintainability: {complexity['summary']['maintainability_index']:.1f}")
+    
+    # Show complex functions
+    complex_funcs = [
+        f for f in complexity['functions'] 
+        if f['complexity'] > 10
+    ]
+    if complex_funcs:
+        print(f"  Complex functions: {', '.join(f['name'] for f in complex_funcs)}")
+```
 
 ## Usage Examples
 
@@ -459,16 +532,17 @@ await delete_file("non_indexed_file.py")
 ```
 
 ### 7. analyze_complexity
-Calculate cyclomatic complexity for Python files to assess code maintainability.
+Calculate code complexity with language-specific understanding for Python, Java, and Kotlin.
 
 **Key Features:**
-- Measures cyclomatic complexity for each function/method
-- Calculates maintainability index (MI score)
-- Provides complexity rankings (A-F)
-- Generates actionable refactoring recommendations
+- **Multi-language support**: Python, Java, and Kotlin analyzers
+- **Dual metrics**: Both cyclomatic and cognitive complexity
+- **Maintainability Index**: Overall code health score (0-100)
+- **Language-specific features**: Handles unique constructs per language
+- **Smart recommendations**: Actionable refactoring suggestions
 
 **Parameters:**
-- `file_path`: Path to the Python file to analyze
+- `file_path`: Path to the code file to analyze
 - `include_metrics`: Include additional metrics like maintainability index (default: true)
 
 **Example:**

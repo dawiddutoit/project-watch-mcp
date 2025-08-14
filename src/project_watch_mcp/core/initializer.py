@@ -12,7 +12,7 @@ from neo4j import AsyncDriver, AsyncGraphDatabase
 from ..config import EmbeddingConfig, ProjectConfig
 from ..neo4j_rag import CodeFile, Neo4jRAG
 from ..repository_monitor import RepositoryMonitor
-from ..utils.embedding import create_embeddings_provider
+from ..utils.embeddings import create_embeddings_provider
 from .monitoring_manager import MonitoringManager
 
 logger = logging.getLogger(__name__)
@@ -144,9 +144,11 @@ class RepositoryInitializer:
             )
 
             # Create embeddings provider
-            embedding_config = EmbeddingConfig()
+            embedding_config = EmbeddingConfig.from_env()
             embeddings_provider = create_embeddings_provider(
                 provider_type=embedding_config.provider,
+                api_key=embedding_config.api_key,
+                model=embedding_config.model,
                 dimension=embedding_config.dimension,
             )
 

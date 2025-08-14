@@ -243,7 +243,7 @@ def create_fallback_output() -> Dict[str, Any]:
             "hookEventName": "SessionStart",
             "additionalContext": (
                 "Please initialize the Project Watch MCP repository monitoring "
-                "by calling: mcp__project-watch-local__initialize_repository"
+                "by calling: mcp__project-watch-mcp__initialize_repository"
             ),
             "initializationStatus": "manual_required"
         }
@@ -314,7 +314,7 @@ def create_error_output(result: Dict[str, Any]) -> Dict[str, Any]:
         context_parts.append(f"Details: {message}")
     
     context_parts.append(
-        "Please manually initialize by calling: mcp__project-watch-local__initialize_repository"
+        "Please manually initialize by calling: mcp__project-watch-mcp__initialize_repository"
     )
     
     return {
@@ -392,7 +392,7 @@ def main() -> int:
                 "hookEventName": "SessionStart",
                 "additionalContext": (
                     "SessionStart hook encountered an error. "
-                    "Please manually initialize: mcp__project-watch-local__initialize_repository"
+                    "Please manually initialize: mcp__project-watch-mcp__initialize_repository"
                 ),
                 "initializationStatus": "hook_error",
                 "error": str(e)

@@ -15,7 +15,7 @@ from .core import RepositoryInitializer
 from .neo4j_rag import Neo4jRAG
 from .repository_monitor import RepositoryMonitor
 from .server import create_mcp_server
-from .utils.embedding import create_embeddings_provider
+from .utils.embeddings import create_embeddings_provider
 
 # Configure logging - default to WARNING to reduce verbosity
 logging.basicConfig(
@@ -161,15 +161,22 @@ async def main(
     embedding_config = EmbeddingConfig.from_env()
 
     # Create embeddings provider
-    embeddings = create_embeddings_provider(
-        provider_type=embedding_config.provider,
-        api_key=embedding_config.openai_api_key,
-        model=embedding_config.openai_model,
-        api_url=embedding_config.local_api_url,
-        dimension=embedding_config.dimension,
-    )
-
-    logger.debug(f"Using {embedding_config.provider} embeddings provider")
+    if embedding_config.provider == "disabled":
+        embeddings = None
+        logger.warning("Embeddings disabled - no API key configured")
+        logger.warning("Semantic search features will not be available")
+    else:
+        embeddings = create_embeddings_provider(
+            provider_type=embedding_config.provider,
+            api_key=embedding_config.api_key,
+            model=embedding_config.model,
+            dimension=embedding_config.dimension,
+        )
+        
+        if embeddings is None:
+            logger.warning("Failed to create embeddings provider - semantic search disabled")
+        else:
+            logger.debug(f"Using {embedding_config.provider} embeddings provider")
 
     # Create Neo4j RAG system with project context
     neo4j_rag = Neo4jRAG(
@@ -182,6 +189,10 @@ async def main(
     await neo4j_rag.initialize()
     logger.debug("Neo4j RAG system initialized")
 
+    # Start the repository monitor to enable file watching
+    await repository_monitor.start(daemon=True)
+    logger.debug("Repository monitor started")
+    
     # Create MCP server with project context
     mcp = create_mcp_server(
         repository_monitor=repository_monitor,

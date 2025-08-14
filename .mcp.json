@@ -1,9 +1,8 @@
 {
   "mcpServers": {
-    "project-watch-local": {
-      "command": "uv",
+    "project-watch-mcp": {
+      "command": "uvx",
       "args": [
-        "run",
         "project-watch-mcp",
         "--transport",
         "stdio",
@@ -15,8 +14,8 @@
         "NEO4J_USER": "${NEO4J_USER}",
         "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
         "NEO4J_DATABASE": "${NEO4J_DB}",
-        "EMBEDDING_PROVIDER": "mock",
-        "FILE_PATTERNS": "${FILE_PATTERNS:-*.py,*.js,*.ts,*.md,*.json,*.yaml,*.yml}"
+        "EMBEDDING_PROVIDER": "voyage",
+        "FILE_PATTERNS": "${FILE_PATTERNS:-*.py,*.js,*.ts,*.md,*.json,*.yaml,*.yml, *.toml}"
       }
     }
   }

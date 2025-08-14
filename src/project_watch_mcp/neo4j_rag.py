@@ -13,12 +13,74 @@ from typing import Any
 
 from neo4j import AsyncDriver, RoutingControl
 
-from .utils.embedding import (
+from .config import EmbeddingConfig
+from .utils.embeddings import (
     EmbeddingsProvider,
-    MockEmbeddingsProvider,
+    OpenAIEmbeddingsProvider,
+    create_embeddings_provider,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def lucene_phrase(query: str) -> str:
+    """Wrap user text as a Lucene phrase for literal matching.
+
+    We only escape backslashes and quotes inside the phrase.
+    Example: search [item] -> "search [item]"
+             path("a\b")  -> "path(\"a\\b\")"
+    """
+    if not query:
+        return query
+    
+    # Import here to avoid circular imports
+    from . import __lucene_fix_version__, __build_timestamp__
+    logger.info(f"[LUCENE-PHRASE {__lucene_fix_version__}] Converting to phrase: {query!r}")
+    logger.debug(f"Build timestamp: {__build_timestamp__}")
+    
+    q = query.replace("\\", "\\\\").replace('"', '\\"')
+    result = f'"{q}"'
+    
+    logger.info(f"[LUCENE-PHRASE {__lucene_fix_version__}] Result: {result!r}")
+    return result
+
+
+def escape_lucene_query(query: str) -> str:
+    """Escape special characters in Lucene query syntax.
+    
+    Escapes special characters that have meaning in Lucene query syntax.
+    Note: In Neo4j's Lucene implementation, backslashes need to be double-escaped.
+    
+    Args:
+        query: The raw query string to escape
+        
+    Returns:
+        Query string with special characters escaped for Lucene
+    """
+    if not query:
+        return query
+    
+    # Special characters that need escaping in Lucene
+    # Note: && and || are operators, single & and | are not
+    special_chars = [
+        '+', '-', '!', '(', ')', '{', '}', '[', ']', '^',
+        '"', '~', '*', '?', ':', '\\', '/'
+    ]
+    
+    result = query
+    
+    # Escape && and || operators (but not single & or |)
+    result = result.replace('&&', '\\&&')
+    result = result.replace('||', '\\||')
+    
+    # Escape other special characters with double backslash for Neo4j
+    for char in special_chars:
+        result = result.replace(char, f'\\\\{char}')
+    
+    # Handle arrow operator specially
+    result = result.replace('->', '\\\\->')
+    
+    return result
 
 
 @dataclass
@@ -62,7 +124,13 @@ class CodeFile:
             self.line_count = max(1, len(self.content.splitlines()))
 
         # Extract namespace/package for supported languages
-        if self.namespace is None and self.language in ["python", "java", "csharp", "typescript", "javascript"]:
+        if self.namespace is None and self.language in [
+            "python",
+            "java",
+            "csharp",
+            "typescript",
+            "javascript",
+        ]:
             self._extract_namespace()
 
     def _detect_file_type(self):
@@ -71,22 +139,50 @@ class CodeFile:
         path_str = str(self.path).lower()
 
         # Test file detection
-        test_patterns = ["test_", "_test.", "spec.", ".test.", ".spec.", "tests/", "test/", "__tests__/"]
-        self.is_test = any(pattern in filename_lower or pattern in path_str for pattern in test_patterns)
+        test_patterns = [
+            "test_",
+            "_test.",
+            "spec.",
+            ".test.",
+            ".spec.",
+            "tests/",
+            "test/",
+            "__tests__/",
+        ]
+        self.is_test = any(
+            pattern in filename_lower or pattern in path_str for pattern in test_patterns
+        )
 
         # Config file detection
         config_patterns = ["config", "settings", ".yaml", ".yml", ".toml", ".ini", ".env", ".json"]
-        config_names = ["package.json", "pyproject.toml", "tsconfig.json", "webpack.config", "jest.config"]
+        config_names = [
+            "package.json",
+            "pyproject.toml",
+            "tsconfig.json",
+            "webpack.config",
+            "jest.config",
+        ]
         # Check for rc files (e.g., .bashrc, .vimrc)
         is_rc_file = filename_lower.startswith(".") and filename_lower.endswith("rc")
         self.is_config = (
-            any(pattern in filename_lower for pattern in config_patterns) or
-            any(name in filename_lower for name in config_names) or
-            is_rc_file
+            any(pattern in filename_lower for pattern in config_patterns)
+            or any(name in filename_lower for name in config_names)
+            or is_rc_file
         )
 
         # Resource file detection
-        resource_extensions = [".sql", ".xml", ".csv", ".txt", ".dat", ".png", ".jpg", ".svg", ".css", ".scss"]
+        resource_extensions = [
+            ".sql",
+            ".xml",
+            ".csv",
+            ".txt",
+            ".dat",
+            ".png",
+            ".jpg",
+            ".svg",
+            ".css",
+            ".scss",
+        ]
         self.is_resource = any(filename_lower.endswith(ext) for ext in resource_extensions)
 
         # Documentation detection
@@ -100,7 +196,7 @@ class CodeFile:
             parts = self.path.parts
             if "src" in parts:
                 idx = parts.index("src")
-                package_parts = [p for p in parts[idx+1:-1] if not p.startswith("__")]
+                package_parts = [p for p in parts[idx + 1 : -1] if not p.startswith("__")]
                 if package_parts:
                     self.namespace = ".".join(package_parts)
             elif "site-packages" in str(self.path):
@@ -112,12 +208,16 @@ class CodeFile:
                 self.namespace = package_name
         elif self.language == "java":
             # Extract package declaration
-            package_match = re.search(r'^\s*package\s+([a-zA-Z0-9_.]+)\s*;', self.content, re.MULTILINE)
+            package_match = re.search(
+                r"^\s*package\s+([a-zA-Z0-9_.]+)\s*;", self.content, re.MULTILINE
+            )
             if package_match:
                 self.namespace = package_match.group(1)
         elif self.language == "csharp":
             # Extract namespace declaration
-            namespace_match = re.search(r'^\s*namespace\s+([a-zA-Z0-9_.]+)', self.content, re.MULTILINE)
+            namespace_match = re.search(
+                r"^\s*namespace\s+([a-zA-Z0-9_.]+)", self.content, re.MULTILINE
+            )
             if namespace_match:
                 self.namespace = namespace_match.group(1)
         elif self.language in ["typescript", "javascript"]:
@@ -125,7 +225,7 @@ class CodeFile:
             parts = self.path.parts
             if "src" in parts:
                 idx = parts.index("src")
-                module_parts = parts[idx+1:-1]
+                module_parts = parts[idx + 1 : -1]
                 if module_parts:
                     self.namespace = "/".join(module_parts)
 
@@ -181,6 +281,7 @@ class Neo4jRAG:
         neo4j_driver: AsyncDriver,
         project_name: str,
         embeddings: EmbeddingsProvider | None = None,
+        embedding_config: EmbeddingConfig | None = None,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
     ):
@@ -190,15 +291,53 @@ class Neo4jRAG:
         Args:
             neo4j_driver: Neo4j driver for database connection
             project_name: Name of the project for context isolation
-            embeddings: Embeddings provider (defaults to mock)
+            embeddings: Embeddings provider (takes precedence over config)
+            embedding_config: Configuration for creating embeddings provider
             chunk_size: Size of code chunks in lines
             chunk_overlap: Overlap between chunks in lines
         """
         self.neo4j_driver = neo4j_driver
         self.project_name = project_name
-        self.embeddings = embeddings or MockEmbeddingsProvider()
+
+        # Initialize embeddings provider
+        if embeddings is not None:
+            # Use provided embeddings provider
+            self.embeddings = embeddings
+        elif embedding_config is not None:
+            # Create provider from config
+            self.embeddings = self._create_provider_from_config(embedding_config)
+        else:
+            # Default behavior: try OpenAI, disable if no API key
+            try:
+                self.embeddings = OpenAIEmbeddingsProvider()
+            except ValueError:
+                logger.warning("OpenAI API key not found. Embeddings disabled.")
+                logger.warning("Semantic search features will not be available.")
+                self.embeddings = None
+
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+
+    def _create_provider_from_config(self, config: EmbeddingConfig) -> EmbeddingsProvider:
+        """
+        Create embeddings provider from configuration.
+
+        Args:
+            config: Embedding configuration
+
+        Returns:
+            Configured embeddings provider
+        """
+        kwargs = {}
+
+        if config.model:
+            kwargs["model"] = config.model
+        if config.api_key:
+            kwargs["api_key"] = config.api_key
+        if config.dimension:
+            kwargs["dimension"] = config.dimension
+
+        return create_embeddings_provider(config.provider, **kwargs)
 
     async def initialize(self):
         """Initialize the RAG system and create necessary indexes."""
@@ -230,10 +369,16 @@ class Neo4jRAG:
             CREATE INDEX chunk_project_index IF NOT EXISTS
             FOR (c:CodeChunk) ON (c.project_name)
             """,
-            # Create fulltext index for code search
+            # Create fulltext index for code search with code-friendly analyzer
             """
             CREATE FULLTEXT INDEX code_search IF NOT EXISTS
             FOR (c:CodeChunk) ON EACH [c.content]
+            OPTIONS {
+                indexConfig: {
+                    `fulltext.analyzer`: 'keyword',
+                    `fulltext.eventually_consistent`: false
+                }
+            }
             """,
         ]
 
@@ -245,26 +390,27 @@ class Neo4jRAG:
                 # Index might already exist or syntax not supported
                 logger.debug(f"Index creation: {e}")
 
-        # Try to create vector index if Neo4j version supports it
-        try:
-            # Get embedding dimension from provider
-            embedding_dim = self.embeddings.dimension
+        # Try to create vector index if Neo4j version supports it and embeddings are enabled
+        if self.embeddings:
+            try:
+                # Get embedding dimension from provider
+                embedding_dim = self.embeddings.dimension
 
-            vector_query = f"""
-            CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS
-            FOR (c:CodeChunk) ON (c.embedding)
-            OPTIONS {{indexConfig: {{
-                `vector.dimensions`: {embedding_dim},
-                `vector.similarity_function`: 'cosine'
-            }}}}
-            """
-            await self.neo4j_driver.execute_query(
-                vector_query, routing_control=RoutingControl.WRITE
-            )
-            logger.info(f"Created vector index for semantic search with {embedding_dim} dimensions")
-        except Exception as e:
-            logger.warning(f"Vector index not supported in this Neo4j version: {e}")
-            logger.info("Semantic search will use fallback cosine similarity calculation")
+                vector_query = f"""
+                CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS
+                FOR (c:CodeChunk) ON (c.embedding)
+                OPTIONS {{indexConfig: {{
+                    `vector.dimensions`: {embedding_dim},
+                    `vector.similarity_function`: 'cosine'
+                }}}}
+                """
+                await self.neo4j_driver.execute_query(
+                    vector_query, routing_control=RoutingControl.WRITE
+                )
+                logger.info(f"Created vector index for semantic search with {embedding_dim} dimensions")
+            except Exception as e:
+                logger.warning(f"Vector index not supported in this Neo4j version: {e}")
+                logger.info("Semantic search will use fallback cosine similarity calculation")
 
     def chunk_content(self, content: str, chunk_size: int, overlap: int) -> list[str]:
         """
@@ -355,8 +501,11 @@ class Neo4jRAG:
             start_line = current_line + 1
             end_line = current_line + len(chunk_lines)
 
-            # Generate embedding for chunk
-            embedding = await self.embeddings.embed_text(chunk)
+            # Generate embedding for chunk if embeddings are enabled
+            if self.embeddings:
+                embedding = await self.embeddings.embed_text(chunk)
+            else:
+                embedding = None
 
             # Create chunk node with project context
             chunk_query = """
@@ -452,6 +601,11 @@ class Neo4jRAG:
         Returns:
             List of search results
         """
+        # Check if embeddings are available
+        if not self.embeddings:
+            logger.warning("Semantic search unavailable - embeddings disabled")
+            return []
+
         # Generate query embedding
         query_embedding = await self.embeddings.embed_text(query)
 
@@ -555,7 +709,7 @@ class Neo4jRAG:
         limit: int = 10,
     ) -> list[SearchResult]:
         """
-        Search for code by pattern or regex with project context.
+        Search for code by pattern (literal phrase via Lucene) or by regex (Cypher =~).
 
         Args:
             pattern: Search pattern
@@ -566,7 +720,7 @@ class Neo4jRAG:
             List of search results
         """
         if is_regex:
-            # Use regex matching
+            # Regex path (no Lucene or fulltext index used)
             query = """
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c:CodeChunk)
             WHERE c.project_name = $project_name AND c.content =~ $pattern
@@ -576,8 +730,15 @@ class Neo4jRAG:
                    c.project_name as project_name
             LIMIT $limit
             """
+            query_pattern = pattern
+
         else:
-            # Use fulltext search
+            # Treat the user input as a literal phrase, not as Lucene syntax.
+            # This makes characters like [ ] ( ) : etc. safe without fiddly escapes.
+            phrase = lucene_phrase(pattern)
+
+            logger.info(f"Pattern search (phrase): raw={pattern!r} phrase={phrase!r}")
+
             query = """
             CALL db.index.fulltext.queryNodes('code_search', $pattern)
             YIELD node as c, score
@@ -591,16 +752,17 @@ class Neo4jRAG:
             ORDER BY score DESC
             LIMIT $limit
             """
+            query_pattern = phrase
 
         result = await self.neo4j_driver.execute_query(
             query,
-            {"project_name": self.project_name, "pattern": pattern, "limit": limit},
+            {"project_name": self.project_name, "pattern": query_pattern, "limit": limit},
             routing_control=RoutingControl.READ,
         )
 
-        search_results = []
+        out: list[SearchResult] = []
         for record in result.records:
-            search_results.append(
+            out.append(
                 SearchResult(
                     project_name=record.get("project_name", self.project_name),
                     file_path=Path(record["file_path"]),
@@ -609,8 +771,7 @@ class Neo4jRAG:
                     similarity=record.get("similarity", 1.0),
                 )
             )
-
-        return search_results
+        return out
 
     async def get_file_metadata(self, file_path: Path) -> dict[str, Any] | None:
         """

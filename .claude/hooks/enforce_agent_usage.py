@@ -37,11 +37,11 @@ REQUIRE_AGENT_TOOLS = {
     "mcp__memory__delete_entities",
     "mcp__memory__delete_observations",
     "mcp__memory__delete_relations",
-    "mcp__project-watch-local__initialize_repository",
-    "mcp__project-watch-local__search_code",
-    "mcp__project-watch-local__refresh_file",
-    "mcp__project-watch-local__delete_file",
-    "mcp__project-watch-local__analyze_complexity"
+    "mcp__project-watch-mcp__initialize_repository",
+    "mcp__project-watch-mcp__search_code",
+    "mcp__project-watch-mcp__refresh_file",
+    "mcp__project-watch-mcp__delete_file",
+    "mcp__project-watch-mcp__analyze_complexity"
 }
 
 # Agent-related tools that indicate proper delegation

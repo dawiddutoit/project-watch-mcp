@@ -6,11 +6,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run project-watch-mcp --initialize",
-            "timeout": 30
-          },
-          {
-            "type": "command",
             "command": "python ./.claude/hooks/session-start.py"
           }
         ]

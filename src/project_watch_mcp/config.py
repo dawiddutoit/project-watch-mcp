@@ -1,6 +1,5 @@
 """Configuration for project-watch-mcp."""
 
-import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -64,8 +63,6 @@ class ProjectConfig:
             ProjectConfig instance
         """
         # Generate a deterministic project name from path
-        path_str = str(repo_path.resolve())
-        path_hash = hashlib.sha256(path_str.encode()).hexdigest()[:8]
         project_name = repo_path.name
 
         # Sanitize the generated name
@@ -99,30 +96,45 @@ class ProjectConfig:
 class EmbeddingConfig:
     """Configuration for embedding provider."""
 
-    provider: Literal["openai", "local", "mock"] = "mock"
-    # OpenAI configuration
-    openai_api_key: str | None = None
-    openai_model: str = "text-embedding-3-small"
-    # Local configuration
-    local_api_url: str = "http://localhost:8080/embeddings"
-    # Embedding dimensions
-    dimension: int = 384
+    provider: Literal["openai", "voyage", "disabled"] = "disabled"
+    # Model name (used by both OpenAI and Voyage)
+    model: str | None = None
+    # API keys
+    api_key: str | None = None
+    # Embedding dimensions (auto-detected based on model if not specified)
+    dimension: int | None = None
 
     @classmethod
     def from_env(cls) -> "EmbeddingConfig":
         """Create configuration from environment variables."""
-        provider = os.getenv("EMBEDDING_PROVIDER", "mock")
+        provider = os.getenv("EMBEDDING_PROVIDER", "voyage").lower()
 
         # Validate provider
-        if provider not in ["openai", "local", "mock"]:
-            provider = "mock"
+        if provider not in ["openai", "voyage"]:
+            provider = "disabled"
+
+        # Determine model based on provider
+        model = None
+        api_key = None
+        dimension = None
+
+        if provider == "openai":
+            model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            api_key = os.getenv("OPENAI_API_KEY")
+            dimension = int(os.getenv("OPENAI_EMBEDDING_DIMENSION", "1536"))
+        elif provider == "voyage":
+            model = os.getenv("VOYAGE_EMBEDDING_MODEL", "voyage-code-3")
+            api_key = os.getenv("VOYAGE_API_KEY")
+            dimension = int(os.getenv("VOYAGE_EMBEDDING_DIMENSION", "1024"))
+        else:
+            # Disabled provider
+            dimension = None
 
         return cls(
             provider=provider,
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
-            openai_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-            local_api_url=os.getenv("LOCAL_EMBEDDING_API_URL", "http://localhost:8080/embeddings"),
-            dimension=int(os.getenv("EMBEDDING_DIMENSION", "384")),
+            model=model,
+            api_key=api_key,
+            dimension=dimension,
         )
 
 

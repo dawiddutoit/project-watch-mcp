@@ -966,7 +966,7 @@ def create_mcp_server(
         Get the current status of repository monitoring.
 
         Provides real-time information about file monitoring, pending changes,
-        and system health.
+        system health, and version information.
 
         Examples:
             >>> await monitoring_status()
@@ -976,6 +976,11 @@ def create_mcp_server(
                 "file_patterns": ["*.py", "*.js", "*.ts", "*.md"],
                 "monitoring_since": "2024-01-15T10:00:00Z",
                 "pending_changes": 3,
+                "version_info": {
+                    "version": "0.1.0",
+                    "build_timestamp": "2024-01-15T10:30:00",
+                    "lucene_fix_version": "v2.0-double-escape"
+                },
                 "recent_changes": [
                     {
                         "change_type": "modified",
@@ -1004,6 +1009,10 @@ def create_mcp_server(
             - file_patterns: List of file patterns being monitored
             - monitoring_since: When monitoring started (ISO 8601)
             - pending_changes: Number of unprocessed file changes
+            - version_info: Server version and build information
+                - version: Package version
+                - build_timestamp: When package was built
+                - lucene_fix_version: Lucene escaping fix version
             - recent_changes: Last 5 changes with:
                 - change_type: "added", "modified", or "deleted"
                 - path: File path relative to repository
@@ -1028,6 +1037,9 @@ def create_mcp_server(
             - File patterns follow gitignore syntax
         """
         try:
+            # Import version info
+            from . import __version__, __build_timestamp__, __lucene_fix_version__
+            
             pending_changes = await repository_monitor.process_all_changes()
 
             status = {
@@ -1035,6 +1047,11 @@ def create_mcp_server(
                 "repository_path": str(repository_monitor.repo_path),
                 "file_patterns": repository_monitor.file_patterns,
                 "pending_changes": len(pending_changes),
+                "version_info": {
+                    "version": __version__,
+                    "build_timestamp": __build_timestamp__,
+                    "lucene_fix_version": __lucene_fix_version__
+                }
             }
 
             result_text = f"""Monitoring Status:
@@ -1042,6 +1059,8 @@ def create_mcp_server(
 - Repository: {status['repository_path']}
 - Patterns: {', '.join(status['file_patterns'])}
 - Pending Changes: {status['pending_changes']}
+- Version: {__version__} (built: {__build_timestamp__})
+- Lucene Fix: {__lucene_fix_version__}
 """
 
             if pending_changes:
