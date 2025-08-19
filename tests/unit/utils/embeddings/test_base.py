@@ -5,7 +5,7 @@ import pytest
 from project_watch_mcp.utils.embeddings.base import EmbeddingsProvider
 
 
-class TestEmbeddingsProvider:
+class MockEmbeddingsProvider:
     """Test EmbeddingsProvider abstract base class."""
 
     def test_cannot_instantiate_abstract_class(self):

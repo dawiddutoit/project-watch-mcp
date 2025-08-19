@@ -101,9 +101,9 @@ class TestNeo4jConfig:
             os.environ,
             {
                 "NEO4J_URI": "bolt://env:7687",
-                "NEO4J_USERNAME": "env_user",
-                "NEO4J_PASSWORD": "env_pass",
-                "NEO4J_DATABASE": "env_db",
+                "PROJECT_WATCH_USERNAME": "env_user",
+                "PROJECT_WATCH_PASSWORD": "env_pass",
+                "PROJECT_WATCH_DATABASE": "env_db",
             },
         ):
             config = Neo4jConfig.from_env()
@@ -226,9 +226,9 @@ class TestProjectWatchConfig:
             os.environ,
             {
                 "NEO4J_URI": "bolt://env:7687",
-                "NEO4J_USERNAME": "env_user",
-                "NEO4J_PASSWORD": "env_pass",
-                "NEO4J_DATABASE": "env_db",
+                "PROJECT_WATCH_USERNAME": "env_user",
+                "PROJECT_WATCH_PASSWORD": "env_pass",
+                "PROJECT_WATCH_DATABASE": "env_db",
                 "EMBEDDING_PROVIDER": "openai",
                 "OPENAI_API_KEY": "test-key",
                 "CHUNK_SIZE": "1000",

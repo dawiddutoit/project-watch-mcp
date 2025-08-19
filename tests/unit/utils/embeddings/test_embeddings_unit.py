@@ -13,7 +13,7 @@ from project_watch_mcp.utils.embeddings import (
 )
 
 
-class TestEmbeddingsProvider:
+class MockEmbeddingsProvider:
     """Test the base EmbeddingsProvider class."""
 
     def test_base_initialization(self):

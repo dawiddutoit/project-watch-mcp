@@ -16,7 +16,7 @@
 
 Key agents for this project:
 - `@agent-project-context-expert` - Project info, conventions, commands
-- `@agent-project-memory-navigator` - Find files, search code
+- `@agent-project-file-navigator` - Find files, search code
 - `@agent-project-todo-orchestrator` - Manage tasks and todos
   The above three agents are critical for any work you do in this project. If you work without using them, your session will be stopped.
   

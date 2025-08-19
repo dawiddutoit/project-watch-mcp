@@ -13,7 +13,7 @@ This file provides a comprehensive list of all available agents for use in the p
 - `project-todo-orchestrator` - Create/manage todos if working on features
 
 ### 3. Discover & Research
-- `project-memory-navigator` - Find files, locate code elements
+- `project-file-navigator` - Find files, locate code elements
 - `researcher` - Conduct research, analyze solutions
 - Architecture agents for domain expertise (see below)
 
@@ -33,7 +33,7 @@ This file provides a comprehensive list of all available agents for use in the p
 | Agent | Purpose | When to Use |
 |-------|---------|-------------|
 | `project-context-expert` | Project questions, configuration, patterns | Understanding project setup, conventions, tooling |
-| `project-memory-navigator` | File discovery, code search, navigation | Finding files, classes, functions, or code patterns |
+| `project-file-navigator` | File discovery, code search, navigation | Finding files, classes, functions, or code patterns |
 | `project-todo-orchestrator` | Task management, todo creation/updates | Managing work items, tracking progress |
 
 ## Development Agents
@@ -95,14 +95,14 @@ When you need to delegate work to another agent:
 
 ### For Project-Specific Agents
 - **project-context-expert**: Consult for any project-specific questions before making assumptions
-- **project-memory-navigator**: Always use for file discovery instead of searching manually
+- **project-file-navigator**: Always use for file discovery instead of searching manually
 - **project-todo-orchestrator**: Coordinate with for task status updates
 
 ### Agent Selection Examples
 
 ```markdown
 # Need to find a specific class
-Use: project-memory-navigator
+Use: project-file-navigator
 
 # Need to understand testing conventions
 Use: project-context-expert

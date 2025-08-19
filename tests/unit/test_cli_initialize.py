@@ -40,9 +40,9 @@ class TestInitializeOnlyFunction:
             # Run initialization
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 project_name="test_project",
                 verbose=True
@@ -52,9 +52,9 @@ class TestInitializeOnlyFunction:
             assert exit_code == 0
             mock_initializer_class.assert_called_once_with(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=temp_dir,
                 project_name="test_project",
                 progress_callback=mock_initializer_class.call_args[1]['progress_callback']
@@ -75,9 +75,9 @@ class TestInitializeOnlyFunction:
             # Run initialization
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 verbose=False
             )
@@ -108,9 +108,9 @@ class TestInitializeOnlyFunction:
             # Run with verbose mode
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 verbose=True
             )
@@ -140,9 +140,9 @@ class TestInitializeOnlyFunction:
             # Run without project_name
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(specific_dir),
                 project_name=None
             )
@@ -270,9 +270,9 @@ class TestCLIArgumentParsing:
         """Test environment variables are properly handled."""
         env_vars = {
             "NEO4J_URI": "bolt://custom:7687",
-            "NEO4J_USER": "custom_user",
-            "NEO4J_PASSWORD": "custom_pass",
-            "NEO4J_DATABASE": "custom_db",
+            "PROJECT_WATCH_USER": "custom_user",
+            "PROJECT_WATCH_PASSWORD": "custom_pass",
+            "PROJECT_WATCH_DATABASE": "custom_db",
             "REPOSITORY_PATH": str(temp_dir),
             "PROJECT_NAME": "env_project"
         }
@@ -295,9 +295,9 @@ class TestCLIArgumentParsing:
                         assert mock_init_class.called
                         call_kwargs = mock_init_class.call_args[1]
                         assert call_kwargs['neo4j_uri'] == "bolt://custom:7687"
-                        assert call_kwargs['neo4j_user'] == "custom_user"
-                        assert call_kwargs['neo4j_password'] == "custom_pass"
-                        assert call_kwargs['neo4j_database'] == "custom_db"
+                        assert call_kwargs['PROJECT_WATCH_USER'] == "custom_user"
+                        assert call_kwargs['PROJECT_WATCH_PASSWORD'] == "custom_pass"
+                        assert call_kwargs['PROJECT_WATCH_DATABASE'] == "custom_db"
                         assert call_kwargs['repository_path'] == temp_dir.absolute()
                         assert call_kwargs['project_name'] == "env_project"
 
@@ -366,9 +366,9 @@ class TestEndToEndIntegration:
             # Run initialization
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 project_name="e2e_test",
                 verbose=True
@@ -413,9 +413,9 @@ class TestEndToEndIntegration:
             # Run with verbose
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 verbose=True
             )
@@ -453,9 +453,9 @@ class TestSignalHandling:
             task = asyncio.create_task(
                 initialize_only(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="test",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="test",
                     repository_path=str(temp_dir)
                 )
             )
@@ -489,9 +489,9 @@ class TestSignalHandling:
                 exit_code = await asyncio.wait_for(
                     initialize_only(
                         neo4j_uri="bolt://localhost:7687",
-                        neo4j_user="neo4j",
-                        neo4j_password="password",
-                        neo4j_database="test",
+                        PROJECT_WATCH_USER="neo4j",
+                        PROJECT_WATCH_PASSWORD="password",
+                        PROJECT_WATCH_DATABASE="test",
                         repository_path=str(temp_dir)
                     ),
                     timeout=0.1  # Very short timeout
@@ -570,9 +570,9 @@ class TestSecurityValidation:
             # First call should succeed
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir)
             )
             assert exit_code == 0
@@ -580,9 +580,9 @@ class TestSecurityValidation:
             # Second call should fail (resource protection)
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir)
             )
             assert exit_code == 1
@@ -600,9 +600,9 @@ class TestSubprocessInvocation:
         env = os.environ.copy()
         env.update({
             "NEO4J_URI": "bolt://localhost:7687",
-            "NEO4J_USER": "neo4j",
-            "NEO4J_PASSWORD": "password",
-            "NEO4J_DATABASE": "test"
+            "PROJECT_WATCH_USER": "neo4j",
+            "PROJECT_WATCH_PASSWORD": "password",
+            "PROJECT_WATCH_DATABASE": "test"
         })
         
         # Run CLI via subprocess
@@ -625,9 +625,9 @@ class TestSubprocessInvocation:
         env = os.environ.copy()
         env.update({
             "NEO4J_URI": "bolt://localhost:7687",
-            "NEO4J_USER": "neo4j",
-            "NEO4J_PASSWORD": "password",
-            "NEO4J_DATABASE": "test"
+            "PROJECT_WATCH_USER": "neo4j",
+            "PROJECT_WATCH_PASSWORD": "password",
+            "PROJECT_WATCH_DATABASE": "test"
         })
         
         result = subprocess.run(
@@ -674,9 +674,9 @@ class TestErrorHandling:
             
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="wrong_password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="wrong_password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir)
             )
             
@@ -703,9 +703,9 @@ class TestErrorHandling:
                 
                 exit_code = await initialize_only(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="test",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="test",
                     repository_path=str(temp_dir)
                 )
                 
@@ -729,9 +729,9 @@ class TestErrorHandling:
             
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir)
             )
             
@@ -782,9 +782,9 @@ class TestDefaultValues:
                         assert mock_init_class.called
                         call_kwargs = mock_init_class.call_args[1]
                         assert call_kwargs['neo4j_uri'] == "bolt://localhost:7687"
-                        assert call_kwargs['neo4j_user'] == "neo4j"
-                        assert call_kwargs['neo4j_password'] == "password"
-                        assert call_kwargs['neo4j_database'] == "neo4j"
+                        assert call_kwargs['PROJECT_WATCH_USER'] == "neo4j"
+                        assert call_kwargs['PROJECT_WATCH_PASSWORD'] == "password"
+                        assert call_kwargs['PROJECT_WATCH_DATABASE'] == "neo4j"
 
     def test_initialize_uses_current_directory_by_default(self):
         """Test --initialize uses current directory when no repository specified."""
@@ -833,9 +833,9 @@ class TestOutputFormatting:
             
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 project_name="test_project"
             )
@@ -864,9 +864,9 @@ class TestOutputFormatting:
             
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir),
                 project_name="complete_project"
             )
@@ -890,9 +890,9 @@ class TestOutputFormatting:
             
             exit_code = await initialize_only(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="test",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="test",
                 repository_path=str(temp_dir)
             )
             

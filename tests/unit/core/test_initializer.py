@@ -24,6 +24,23 @@ from src.project_watch_mcp.repository_monitor import FileInfo
 
 
 # =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def create_mock_neo4j_rag(sample_file_infos=None):
+    """Create a properly mocked Neo4jRAG instance with incremental indexing methods."""
+    mock_rag = AsyncMock()
+    mock_rag.index_file = AsyncMock()
+    mock_rag.is_repository_indexed = AsyncMock(return_value=False)
+    mock_rag.get_indexed_files = AsyncMock(return_value={})
+    if sample_file_infos:
+        mock_rag.detect_changed_files = AsyncMock(return_value=(sample_file_infos, [], []))
+    else:
+        mock_rag.detect_changed_files = AsyncMock(return_value=([], [], []))
+    mock_rag.remove_files = AsyncMock()
+    return mock_rag
+
+# =============================================================================
 # FIXTURES
 # =============================================================================
 
@@ -125,9 +142,9 @@ def initializer_params():
     """Default parameters for RepositoryInitializer."""
     return {
         "neo4j_uri": "bolt://localhost:7687",
-        "neo4j_user": "neo4j",
-        "neo4j_password": "password",
-        "neo4j_database": "test_db",
+        "PROJECT_WATCH_USER": "neo4j",
+        "PROJECT_WATCH_PASSWORD": "password",
+        "PROJECT_WATCH_DATABASE": "test_db",
     }
 
 
@@ -144,9 +161,9 @@ class TestRepositoryInitializerInstantiation:
         initializer = RepositoryInitializer(**initializer_params)
         
         assert initializer.neo4j_uri == "bolt://localhost:7687"
-        assert initializer.neo4j_user == "neo4j"
-        assert initializer.neo4j_password == "password"
-        assert initializer.neo4j_database == "test_db"
+        assert initializer.PROJECT_WATCH_USER == "neo4j"
+        assert initializer.PROJECT_WATCH_PASSWORD == "password"
+        assert initializer.PROJECT_WATCH_DATABASE == "test_db"
         assert initializer.repository_path == Path.cwd()
         assert initializer.project_name == Path.cwd().name
         assert initializer.progress_callback is None
@@ -251,8 +268,7 @@ class TestInitializationHappyPath:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(sample_file_infos)
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -277,7 +293,7 @@ class TestInitializationHappyPath:
                         assert result.indexed == 3
                         assert result.total == 3
                         assert result.skipped == []
-                        assert result.monitoring is True
+                        assert result.monitoring is False  # Monitoring not enabled in this test
                         assert "Indexed 3/3 files" in result.message
                         
                         # Verify scan was called
@@ -286,8 +302,8 @@ class TestInitializationHappyPath:
                         # Verify files were indexed
                         assert mock_rag.index_file.call_count == 3
                         
-                        # Verify monitoring started
-                        mock_monitor.start.assert_called_once()
+                        # Verify monitoring NOT started (not enabled in this test)
+                        mock_monitor.start.assert_not_called()
                         
                         # Verify progress callbacks
                         assert progress_callback.call_count > 0
@@ -352,8 +368,7 @@ class TestProgressCallback:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(sample_file_infos)
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -402,8 +417,7 @@ class TestProgressCallback:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(sample_file_infos)
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -450,8 +464,7 @@ class TestFileFiltering:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -557,7 +570,7 @@ class TestErrorHandling:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(sample_file_infos)
                 mock_rag.index_file = AsyncMock(side_effect=Exception("Indexing failed"))
                 mock_rag_class.return_value = mock_rag
                 
@@ -658,8 +671,7 @@ class TestConcurrentInitialization:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -718,8 +730,7 @@ class TestMemoryLeakDetection:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(sample_file_infos)
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -775,8 +786,7 @@ class TestPathHandlingEdgeCases:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -807,8 +817,7 @@ class TestPathHandlingEdgeCases:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -845,8 +854,7 @@ class TestPathHandlingEdgeCases:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -895,8 +903,7 @@ class TestFileEncodingEdgeCases:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -934,8 +941,7 @@ class TestFileEncodingEdgeCases:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -973,8 +979,7 @@ class TestFileEncodingEdgeCases:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -1022,8 +1027,7 @@ class TestBoundaryConditions:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -1060,8 +1064,7 @@ class TestBoundaryConditions:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -1105,8 +1108,7 @@ class TestBoundaryConditions:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -1163,8 +1165,7 @@ class TestPerformance:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag([])
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:
@@ -1213,7 +1214,7 @@ class TestPerformance:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(file_infos)
                 # Simulate some processing time
                 async def mock_index(*args):
                     await asyncio.sleep(0.001)
@@ -1372,8 +1373,7 @@ class TestMonitoringStartFailure:
             mock_db.driver.return_value = mock_neo4j_driver
             
             with patch('src.project_watch_mcp.core.initializer.Neo4jRAG') as mock_rag_class:
-                mock_rag = AsyncMock()
-                mock_rag.index_file = AsyncMock()
+                mock_rag = create_mock_neo4j_rag(sample_file_infos)
                 mock_rag_class.return_value = mock_rag
                 
                 with patch('src.project_watch_mcp.core.initializer.RepositoryMonitor') as mock_monitor_class:

@@ -10,7 +10,7 @@ When this command is invoked at the start of a session, you MUST:
 1. **Read Project Context** - Read and internalize CLAUDE.md for project-specific instructions
 2. **Load Critical Agents** - Use the following agents for ALL work:
    - `@agent-project-context-expert` - For project info, conventions, and commands
-   - `@agent-project-memory-navigator` - For finding files and searching code  
+   - `@agent-project-file-navigator` - For finding files and searching code  
    - `@agent-project-todo-orchestrator` - For managing tasks and todos
 
 3. **Workflow Enforcement**:

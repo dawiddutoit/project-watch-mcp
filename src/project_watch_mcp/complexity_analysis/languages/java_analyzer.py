@@ -528,6 +528,16 @@ class JavaComplexityAnalyzer(BaseComplexityAnalyzer):
         
         grade = ComplexityGrade.from_maintainability_index(mi)
         
+        # Count all classes including nested ones
+        def count_all_classes(class_list):
+            count = len(class_list)
+            for cls in class_list:
+                if cls.nested_classes:
+                    count += count_all_classes(cls.nested_classes)
+            return count
+        
+        total_class_count = count_all_classes(classes)
+        
         return ComplexitySummary(
             total_complexity=total_complexity,
             average_complexity=avg_complexity,
@@ -535,7 +545,7 @@ class JavaComplexityAnalyzer(BaseComplexityAnalyzer):
             maintainability_index=mi,
             complexity_grade=grade.value,
             function_count=len(functions),
-            class_count=len(classes),
+            class_count=total_class_count,
             lines_of_code=total_lines,
             comment_ratio=comment_ratio
         )

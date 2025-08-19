@@ -40,9 +40,9 @@ class TestMainFunction:
             # Run main
             await main(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="neo4j",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="neo4j",
                 repository_path="/test/repo",
                 transport="stdio",
             )
@@ -63,9 +63,9 @@ class TestMainFunction:
             with pytest.raises(SystemExit) as exc_info:
                 await main(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="neo4j",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="neo4j",
                     repository_path="/test/repo",
                 )
             assert exc_info.value.code == 1
@@ -95,9 +95,9 @@ class TestMainFunction:
 
             await main(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="neo4j",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="neo4j",
                 repository_path="/test/repo",
                 transport="http",
                 host="0.0.0.0",
@@ -133,9 +133,9 @@ class TestMainFunction:
 
             await main(
                 neo4j_uri="bolt://localhost:7687",
-                neo4j_user="neo4j",
-                neo4j_password="password",
-                neo4j_database="neo4j",
+                PROJECT_WATCH_USER="neo4j",
+                PROJECT_WATCH_PASSWORD="password",
+                PROJECT_WATCH_DATABASE="neo4j",
                 repository_path="/test/repo",
                 transport="sse",
                 host="localhost",
@@ -173,9 +173,9 @@ class TestMainFunction:
             with pytest.raises(ValueError, match="Unsupported transport"):
                 await main(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="neo4j",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="neo4j",
                     repository_path="/test/repo",
                     transport="invalid",  # type: ignore
                 )
@@ -208,9 +208,9 @@ class TestMainFunction:
             with pytest.raises(Exception, match="Server error"):
                 await main(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="neo4j",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="neo4j",
                     repository_path="/test/repo",
                 )
 
@@ -281,9 +281,9 @@ class TestCLI:
             "os.environ",
             {
                 "NEO4J_URI": "bolt://env:7687",
-                "NEO4J_USER": "env_user",
-                "NEO4J_PASSWORD": "env_pass",
-                "NEO4J_DATABASE": "env_db",
+                "PROJECT_WATCH_USER": "env_user",
+                "PROJECT_WATCH_PASSWORD": "env_pass",
+                "PROJECT_WATCH_DATABASE": "env_db",
             },
         ):
             with patch("sys.argv", ["project-watch-mcp", "--repository", "/test/repo"]):

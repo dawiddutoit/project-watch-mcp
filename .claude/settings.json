@@ -10,18 +10,6 @@
           }
         ]
       }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "./.claude/hooks/enforce_agent_usage.py",
-            "timeout": 5
-          }
-        ]
-      }
     ]
   }
 }

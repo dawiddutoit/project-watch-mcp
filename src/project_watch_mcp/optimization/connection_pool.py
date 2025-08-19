@@ -5,7 +5,7 @@ Database connection pool optimization for Neo4j.
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from neo4j import AsyncGraphDatabase, AsyncSession
 

@@ -18,6 +18,32 @@ class ComplexityGrade(Enum):
     D = "D"  # Poor (MI >= 20)
     F = "F"  # Very Poor (MI < 20)
     
+    def __lt__(self, other):
+        """Enable comparison between grades (A < B < C < D < F)."""
+        if not isinstance(other, ComplexityGrade):
+            return NotImplemented
+        order = ["A", "B", "C", "D", "F"]
+        return order.index(self.value) < order.index(other.value)
+    
+    def __le__(self, other):
+        """Enable <= comparison between grades."""
+        if not isinstance(other, ComplexityGrade):
+            return NotImplemented
+        return self == other or self < other
+    
+    def __gt__(self, other):
+        """Enable > comparison between grades."""
+        if not isinstance(other, ComplexityGrade):
+            return NotImplemented
+        order = ["A", "B", "C", "D", "F"]
+        return order.index(self.value) > order.index(other.value)
+    
+    def __ge__(self, other):
+        """Enable >= comparison between grades."""
+        if not isinstance(other, ComplexityGrade):
+            return NotImplemented
+        return self == other or self > other
+    
     @classmethod
     def from_maintainability_index(cls, mi: float) -> "ComplexityGrade":
         """Calculate grade from maintainability index score."""
@@ -347,3 +373,32 @@ class ComplexityResult:
                 recommendations.append("Code complexity is within acceptable limits")
         
         return recommendations
+
+
+@dataclass
+class ComplexityValidation:
+    """Validation result for complexity analysis."""
+    
+    is_valid: bool
+    issues: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    
+    @property
+    def has_warnings(self) -> bool:
+        """Check if validation has warnings."""
+        return len(self.warnings) > 0
+    
+    @property
+    def has_issues(self) -> bool:
+        """Check if validation has issues."""
+        return len(self.issues) > 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert validation to dictionary."""
+        return {
+            "is_valid": self.is_valid,
+            "issues": self.issues,
+            "warnings": self.warnings,
+            "has_warnings": self.has_warnings,
+            "has_issues": self.has_issues
+        }

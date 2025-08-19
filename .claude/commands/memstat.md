@@ -7,13 +7,13 @@ Monitor and interact with the Project Watch MCP repository monitoring tool.
 
 ### 1. Initialize Repository
 ```
-mcp__project-watch-local__initialize_repository
+mcp__project-watch-mcp__initialize_repository
 ```
 Scans and indexes all repository files for semantic search.
 
 ### 2. Search Code
 ```
-mcp__project-watch-local__search_code
+mcp__project-watch-mcp__search_code
 ```
 **Parameters:**
 - `query` (required): Search query
@@ -24,27 +24,27 @@ mcp__project-watch-local__search_code
 
 ### 3. Get Repository Stats
 ```
-mcp__project-watch-local__get_repository_stats
+mcp__project-watch-mcp__get_repository_stats
 ```
 Shows comprehensive repository statistics including file counts, languages, and index health.
 
 ### 4. Get File Info
 ```
-mcp__project-watch-local__get_file_info
+mcp__project-watch-mcp__get_file_info
 ```
 **Parameters:**
 - `file_path` (required): Path to the file
 
 ### 5. Refresh File
 ```
-mcp__project-watch-local__refresh_file
+mcp__project-watch-mcp__refresh_file
 ```
 **Parameters:**
 - `file_path` (required): Path to file to re-index
 
 ### 6. Monitoring Status
 ```
-mcp__project-watch-local__monitoring_status
+mcp__project-watch-mcp__monitoring_status
 ```
 Shows real-time monitoring status and pending changes.
 
@@ -53,23 +53,23 @@ Shows real-time monitoring status and pending changes.
 ### Check Overall Status
 ```python
 # Get current monitoring status
-await mcp__project-watch-local__monitoring_status()
+await mcp__project-watch-mcp__monitoring_status()
 
 # Get repository statistics
-await mcp__project-watch-local__get_repository_stats()
+await mcp__project-watch-mcp__get_repository_stats()
 ```
 
 ### Search Examples
 ```python
 # Semantic search for authentication logic
-await mcp__project-watch-local__search_code(
+await mcp__project-watch-mcp__search_code(
     query="user authentication and JWT validation",
     search_type="semantic",
     limit=5
 )
 
 # Pattern search for TODOs
-await mcp__project-watch-local__search_code(
+await mcp__project-watch-mcp__search_code(
     query="TODO|FIXME|HACK",
     search_type="pattern",
     is_regex=True,
@@ -77,7 +77,7 @@ await mcp__project-watch-local__search_code(
 )
 
 # Language-specific search
-await mcp__project-watch-local__search_code(
+await mcp__project-watch-mcp__search_code(
     query="async function",
     language="typescript",
     limit=5
@@ -109,25 +109,25 @@ await mcp__project-watch-local__search_code(
 ### 1. Check if MCP is running
 ```bash
 # Check monitoring status
-mcp__project-watch-local__monitoring_status()
+mcp__project-watch-mcp__monitoring_status()
 ```
 
 ### 2. View index statistics
 ```bash
 # Get detailed stats
-mcp__project-watch-local__get_repository_stats()
+mcp__project-watch-mcp__get_repository_stats()
 ```
 
 ### 3. Verify file indexing
 ```bash
 # Check specific file
-mcp__project-watch-local__get_file_info("src/main.py")
+mcp__project-watch-mcp__get_file_info("src/main.py")
 ```
 
 ### 4. Force re-index
 ```bash
 # Re-initialize if needed
-mcp__project-watch-local__initialize_repository()
+mcp__project-watch-mcp__initialize_repository()
 ```
 
 ## Common Issues & Solutions
@@ -158,8 +158,8 @@ mcp__project-watch-local__initialize_repository()
 **Required Environment Variables:**
 ```bash
 NEO4J_URI=neo4j://127.0.0.1:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=<your-password>
+PROJECT_WATCH_USER=neo4j
+PROJECT_WATCH_PASSWORD=<your-password>
 NEO4J_DB=memory
 ```
 
@@ -184,15 +184,15 @@ NEO4J_DB=memory
 
 ```python
 # 1. Initialize repository
-await mcp__project-watch-local__initialize_repository()
+await mcp__project-watch-mcp__initialize_repository()
 
 # 2. Check status
-status = await mcp__project-watch-local__monitoring_status()
+status = await mcp__project-watch-mcp__monitoring_status()
 print(f"Monitoring: {status['is_running']}")
 print(f"Files monitored: {status['statistics']['files_monitored']}")
 
 # 3. Search for specific code
-results = await mcp__project-watch-local__search_code(
+results = await mcp__project-watch-mcp__search_code(
     query="database connection handling",
     search_type="semantic",
     limit=5
@@ -200,10 +200,10 @@ results = await mcp__project-watch-local__search_code(
 
 # 4. Get file details
 for result in results['results']:
-    info = await mcp__project-watch-local__get_file_info(result['file'])
+    info = await mcp__project-watch-mcp__get_file_info(result['file'])
     print(f"{info['path']}: {info['lines']} lines, {info['chunk_count']} chunks")
 
 # 5. Check overall health
-stats = await mcp__project-watch-local__get_repository_stats()
+stats = await mcp__project-watch-mcp__get_repository_stats()
 print(f"Total indexed: {stats['total_files']} files, {stats['total_chunks']} chunks")
 ```

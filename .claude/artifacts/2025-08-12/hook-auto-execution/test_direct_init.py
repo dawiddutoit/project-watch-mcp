@@ -74,23 +74,23 @@ async def test_neo4j_connection():
     from neo4j import AsyncGraphDatabase
     
     neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_password = os.getenv("NEO4J_PASSWORD")
-    neo4j_database = os.getenv("NEO4J_DB", os.getenv("NEO4J_DATABASE", "memory"))
+    PROJECT_WATCH_USER = os.getenv("PROJECT_WATCH_USER", "neo4j")
+    PROJECT_WATCH_PASSWORD = os.getenv("PROJECT_WATCH_PASSWORD")
+    PROJECT_WATCH_DATABASE = os.getenv("NEO4J_DB", os.getenv("PROJECT_WATCH_DATABASE", "memory"))
     
-    if not neo4j_password:
-        print("❌ NEO4J_PASSWORD not set in environment")
+    if not PROJECT_WATCH_PASSWORD:
+        print("❌ PROJECT_WATCH_PASSWORD not set in environment")
         return False
     
     print(f"URI: {neo4j_uri}")
-    print(f"User: {neo4j_user}")
-    print(f"Database: {neo4j_database}")
+    print(f"User: {PROJECT_WATCH_USER}")
+    print(f"Database: {PROJECT_WATCH_DATABASE}")
     
     try:
         driver = AsyncGraphDatabase.driver(
             neo4j_uri,
-            auth=(neo4j_user, neo4j_password),
-            database=neo4j_database
+            auth=(PROJECT_WATCH_USER, PROJECT_WATCH_PASSWORD),
+            database=PROJECT_WATCH_DATABASE
         )
         
         await driver.verify_connectivity()
@@ -113,20 +113,20 @@ async def test_repository_scan():
     from project_watch_mcp.config import ProjectConfig
     
     neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_password = os.getenv("NEO4J_PASSWORD")
-    neo4j_database = os.getenv("NEO4J_DB", os.getenv("NEO4J_DATABASE", "memory"))
+    PROJECT_WATCH_USER = os.getenv("PROJECT_WATCH_USER", "neo4j")
+    PROJECT_WATCH_PASSWORD = os.getenv("PROJECT_WATCH_PASSWORD")
+    PROJECT_WATCH_DATABASE = os.getenv("NEO4J_DB", os.getenv("PROJECT_WATCH_DATABASE", "memory"))
     
-    if not neo4j_password:
-        print("❌ NEO4J_PASSWORD not set - skipping")
+    if not PROJECT_WATCH_PASSWORD:
+        print("❌ PROJECT_WATCH_PASSWORD not set - skipping")
         return False
     
     try:
         # Create Neo4j driver
         driver = AsyncGraphDatabase.driver(
             neo4j_uri,
-            auth=(neo4j_user, neo4j_password),
-            database=neo4j_database
+            auth=(PROJECT_WATCH_USER, PROJECT_WATCH_PASSWORD),
+            database=PROJECT_WATCH_DATABASE
         )
         
         # Create project config
@@ -173,21 +173,21 @@ async def test_mini_initialization():
     from project_watch_mcp.config import ProjectConfig, EmbeddingConfig
     from project_watch_mcp.utils.embedding import create_embeddings_provider
     
-    neo4j_password = os.getenv("NEO4J_PASSWORD")
-    if not neo4j_password:
-        print("❌ NEO4J_PASSWORD not set - skipping")
+    PROJECT_WATCH_PASSWORD = os.getenv("PROJECT_WATCH_PASSWORD")
+    if not PROJECT_WATCH_PASSWORD:
+        print("❌ PROJECT_WATCH_PASSWORD not set - skipping")
         return False
     
     try:
         # Setup
         neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-        neo4j_database = os.getenv("NEO4J_DB", os.getenv("NEO4J_DATABASE", "memory"))
+        PROJECT_WATCH_USER = os.getenv("PROJECT_WATCH_USER", "neo4j")
+        PROJECT_WATCH_DATABASE = os.getenv("NEO4J_DB", os.getenv("PROJECT_WATCH_DATABASE", "memory"))
         
         driver = AsyncGraphDatabase.driver(
             neo4j_uri,
-            auth=(neo4j_user, neo4j_password),
-            database=neo4j_database
+            auth=(PROJECT_WATCH_USER, PROJECT_WATCH_PASSWORD),
+            database=PROJECT_WATCH_DATABASE
         )
         
         project_config = ProjectConfig.from_repository_path(project_root)

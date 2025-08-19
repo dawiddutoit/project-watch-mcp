@@ -56,16 +56,16 @@ async def direct_initialization() -> Dict[str, Any]:
         
         # Get Neo4j configuration from environment
         neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-        neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-        neo4j_password = os.getenv("NEO4J_PASSWORD")
-        neo4j_database = os.getenv("NEO4J_DB", os.getenv("NEO4J_DATABASE", "memory"))
+        PROJECT_WATCH_USER = os.getenv("PROJECT_WATCH_USER", "neo4j")
+        PROJECT_WATCH_PASSWORD = os.getenv("PROJECT_WATCH_PASSWORD")
+        PROJECT_WATCH_DATABASE = os.getenv("NEO4J_DB", os.getenv("PROJECT_WATCH_DATABASE", "memory"))
         
-        if not neo4j_password:
-            logger.warning("NEO4J_PASSWORD not set in environment")
+        if not PROJECT_WATCH_PASSWORD:
+            logger.warning("PROJECT_WATCH_PASSWORD not set in environment")
             return {
                 "status": "skipped",
                 "reason": "Neo4j password not configured in environment",
-                "message": "Please set NEO4J_PASSWORD environment variable"
+                "message": "Please set PROJECT_WATCH_PASSWORD environment variable"
             }
         
         logger.info(f"Connecting to Neo4j at {neo4j_uri}")
@@ -73,8 +73,8 @@ async def direct_initialization() -> Dict[str, Any]:
         # Create Neo4j driver
         neo4j_driver = AsyncGraphDatabase.driver(
             neo4j_uri,
-            auth=(neo4j_user, neo4j_password),
-            database=neo4j_database
+            auth=(PROJECT_WATCH_USER, PROJECT_WATCH_PASSWORD),
+            database=PROJECT_WATCH_DATABASE
         )
         
         # Verify Neo4j connectivity

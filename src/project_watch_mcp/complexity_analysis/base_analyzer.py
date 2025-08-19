@@ -4,12 +4,13 @@ This module provides the foundation for implementing complexity analysis
 across multiple programming languages with a consistent interface.
 """
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Tuple
 
-from .models import ComplexityResult
+from .models import ComplexityResult, ComplexityValidation
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,120 @@ class BaseComplexityAnalyzer(ABC):
             Cognitive complexity score
         """
         pass
+    
+    async def validate_analysis(self, result: ComplexityResult) -> ComplexityValidation:
+        """Validate the accuracy of analysis results.
+        
+        Checks for common issues and validates metric calculations.
+        
+        Args:
+            result: ComplexityResult to validate
+            
+        Returns:
+            ComplexityValidation with status and any issues found
+        """
+        issues = []
+        warnings = []
+        
+        # Check for negative values
+        if result.summary.total_complexity < 0:
+            issues.append("Total complexity cannot be negative")
+        
+        if result.summary.cognitive_complexity < 0:
+            issues.append("Cognitive complexity cannot be negative")
+            
+        # Check for impossible values
+        if result.summary.maintainability_index > 100:
+            issues.append("Maintainability index cannot exceed 100")
+        
+        if result.summary.comment_ratio > 1.0:
+            issues.append("Comment ratio cannot exceed 1.0")
+            
+        # Check function metrics
+        for func in result.functions:
+            if func.complexity < 1:
+                issues.append(f"Function {func.name} has complexity < 1")
+            if func.cognitive_complexity < 0:
+                issues.append(f"Function {func.name} has negative cognitive complexity")
+                
+        # Warnings for suspicious values
+        if result.summary.average_complexity > 50:
+            warnings.append("Extremely high average complexity detected")
+            
+        if result.summary.function_count == 0 and result.summary.lines_of_code > 10:
+            warnings.append("No functions found in non-trivial code")
+        
+        return ComplexityValidation(
+            is_valid=len(issues) == 0,
+            issues=issues,
+            warnings=warnings
+        )
+    
+    def get_language_specific_metrics(self) -> Dict[str, Any]:
+        """Return language-specific metric definitions.
+        
+        Returns:
+            Dictionary of language-specific metrics and thresholds
+        """
+        return {
+            "language": self.language,
+            "cyclomatic_thresholds": {
+                "simple": 10,
+                "moderate": 20,
+                "complex": 50
+            },
+            "cognitive_thresholds": {
+                "simple": 15,
+                "moderate": 30,
+                "complex": 60
+            },
+            "maintainability_thresholds": {
+                "excellent": 80,
+                "good": 60,
+                "fair": 40,
+                "poor": 20
+            }
+        }
+    
+    async def analyze_with_context(
+        self,
+        code: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> ComplexityResult:
+        """Analyze code with additional context information.
+        
+        Context can include information about:
+        - File path for better recommendations
+        - Project type (library, application, test)
+        - Team preferences for complexity thresholds
+        
+        Args:
+            code: Source code to analyze
+            context: Optional context information
+            
+        Returns:
+            ComplexityResult with context-aware recommendations
+        """
+        # Default implementation delegates to analyze_code
+        result = await self.analyze_code(code)
+        
+        # Apply context-aware adjustments if provided
+        if context:
+            result.metadata["context"] = context
+            
+            # Adjust recommendations based on context
+            if context.get("is_test_file"):
+                # Test files can have higher complexity
+                result.metadata["adjusted_thresholds"] = True
+                
+            if context.get("project_type") == "library":
+                # Libraries should have lower complexity
+                if result.summary.average_complexity > 5:
+                    result.recommendations.append(
+                        "Library code should maintain low complexity for ease of use"
+                    )
+        
+        return result
     
     def calculate_maintainability_index(
         self,

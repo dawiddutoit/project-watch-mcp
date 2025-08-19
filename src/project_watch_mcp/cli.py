@@ -12,7 +12,7 @@ from neo4j import AsyncGraphDatabase
 
 from .config import EmbeddingConfig, ProjectConfig
 from .core import RepositoryInitializer
-from .neo4j_rag import Neo4jRAG
+from .neo4j_rag import CodeFile, Neo4jRAG
 from .repository_monitor import RepositoryMonitor
 from .server import create_mcp_server
 from .utils.embeddings import create_embeddings_provider
@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 
 async def initialize_only(
     neo4j_uri: str,
-    neo4j_user: str,
-    neo4j_password: str,
-    neo4j_database: str,
+    PROJECT_WATCH_USER: str,
+    PROJECT_WATCH_PASSWORD: str,
+    PROJECT_WATCH_DATABASE: str,
     repository_path: str,
     project_name: str | None = None,
     verbose: bool = False,
@@ -38,9 +38,9 @@ async def initialize_only(
 
     Args:
         neo4j_uri: Neo4j connection URI
-        neo4j_user: Neo4j username
-        neo4j_password: Neo4j password
-        neo4j_database: Neo4j database name
+        PROJECT_WATCH_USER: Neo4j username
+        PROJECT_WATCH_PASSWORD: Neo4j password
+        PROJECT_WATCH_DATABASE: Neo4j database name
         repository_path: Path to repository to monitor
         project_name: Optional project name for context isolation
         verbose: Enable verbose progress reporting
@@ -48,10 +48,22 @@ async def initialize_only(
     Returns:
         Exit code: 0 for success, 1 for failure
     """
+    initializer = None
     try:
         repo_path = Path(repository_path)
         if not project_name:
             project_name = repo_path.name
+
+        # Log initialization start with masked credentials
+        logger.info(f"Starting repository initialization for project: {project_name}")
+        logger.info(f"Repository path: {repo_path}")
+        logger.info(f"Neo4j URI: {neo4j_uri}")
+        logger.info(f"Neo4j user: {PROJECT_WATCH_USER}")
+        logger.info(f"Neo4j database: {PROJECT_WATCH_DATABASE}")
+        # Mask password in logs
+        if PROJECT_WATCH_PASSWORD:
+            masked_pwd = f"{PROJECT_WATCH_PASSWORD[:2]}{'*' * (len(PROJECT_WATCH_PASSWORD) - 4)}{PROJECT_WATCH_PASSWORD[-2:]}" if len(PROJECT_WATCH_PASSWORD) > 4 else "*" * len(PROJECT_WATCH_PASSWORD)
+            logger.debug(f"Neo4j password: {masked_pwd}")
 
         # Progress callback for verbose mode
         def progress_callback(percentage: float, message: str):
@@ -61,38 +73,50 @@ async def initialize_only(
         # Create initializer
         initializer = RepositoryInitializer(
             neo4j_uri=neo4j_uri,
-            neo4j_user=neo4j_user,
-            neo4j_password=neo4j_password,
-            neo4j_database=neo4j_database,
+            PROJECT_WATCH_USER=PROJECT_WATCH_USER,
+            PROJECT_WATCH_PASSWORD=PROJECT_WATCH_PASSWORD,
+            PROJECT_WATCH_DATABASE=PROJECT_WATCH_DATABASE,
             repository_path=repo_path,
             project_name=project_name,
             progress_callback=progress_callback if verbose else None,
         )
 
-        # Run initialization with persistent monitoring
+        # Run initialization without monitoring for --initialize mode
+        # This mode is just for one-time indexing, not for continuous monitoring
+        # Monitoring will be handled by the MCP server when it runs normally
         async with initializer:
-            result = await initializer.initialize(persistent_monitoring=True)
+            result = await initializer.initialize(persistent_monitoring=False)
 
         # Print clean, simple result
         print(f"Project: {project_name}")
         print(f"Indexed: {result.indexed}/{result.total} files")
         if result.skipped:
             print(f"Skipped: {len(result.skipped)} files")
-        print(f"Monitoring: {'started' if result.monitoring else 'not started'}")
+        print(f"Status: Initialization complete")
 
         return 0
 
+    except KeyboardInterrupt:
+        logger.info("Initialization interrupted by user")
+        return 1
     except Exception as e:
         logger.error(f"Initialization failed: {e}")
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    finally:
+        # Ensure proper cleanup even if something goes wrong
+        if initializer:
+            try:
+                await initializer._cleanup_connections()
+            except Exception:
+                pass
 
 
 async def main(
     neo4j_uri: str,
-    neo4j_user: str,
-    neo4j_password: str,
-    neo4j_database: str,
+    PROJECT_WATCH_USER: str,
+    PROJECT_WATCH_PASSWORD: str,
+    PROJECT_WATCH_DATABASE: str,
     repository_path: str,
     project_name: str | None = None,
     transport: Literal["stdio", "sse", "http"] = "stdio",
@@ -106,9 +130,9 @@ async def main(
 
     Args:
         neo4j_uri: Neo4j connection URI
-        neo4j_user: Neo4j username
-        neo4j_password: Neo4j password
-        neo4j_database: Neo4j database name
+        PROJECT_WATCH_USER: Neo4j username
+        PROJECT_WATCH_PASSWORD: Neo4j password
+        PROJECT_WATCH_DATABASE: Neo4j database name
         repository_path: Path to repository to monitor
         project_name: Optional project name for context isolation
         transport: Transport type (stdio, sse, http)
@@ -117,68 +141,101 @@ async def main(
         path: HTTP/SSE server path
         file_patterns: Comma-separated file patterns to monitor
     """
-    logger.debug("Starting Project Watch MCP Server")
-    logger.debug(f"Repository: {repository_path}")
-    logger.debug(f"Neo4j URI: {neo4j_uri}")
+    # Log server startup with configuration
+    logger.info("=" * 60)
+    logger.info("Starting Project Watch MCP Server")
+    logger.info("=" * 60)
+    logger.info(f"Repository: {repository_path}")
+    logger.info(f"Project name: {project_name or 'auto-detect'}")
+    logger.info(f"Transport: {transport}")
+    if transport in ["http", "sse"]:
+        logger.info(f"Server endpoint: {transport}://{host}:{port}{path}")
+
+    # Log Neo4j configuration with masked password
+    logger.info("Neo4j Configuration:")
+    logger.info(f"  URI: {neo4j_uri}")
+    logger.info(f"  User: {PROJECT_WATCH_USER}")
+    logger.info(f"  Database: {PROJECT_WATCH_DATABASE}")
+    if PROJECT_WATCH_PASSWORD:
+        masked_pwd = f"{PROJECT_WATCH_PASSWORD[:2]}{'*' * (len(PROJECT_WATCH_PASSWORD) - 4)}{PROJECT_WATCH_PASSWORD[-2:]}" if len(PROJECT_WATCH_PASSWORD) > 4 else "*" * len(PROJECT_WATCH_PASSWORD)
+        logger.debug(f"  Password: {masked_pwd}")
+
+    logger.info(f"File patterns: {file_patterns}")
 
     # Parse file patterns
     patterns = [p.strip() for p in file_patterns.split(",")]
 
     # Connect to Neo4j
+    logger.info("Initializing Neo4j connection...")
     neo4j_driver = AsyncGraphDatabase.driver(
-        neo4j_uri, auth=(neo4j_user, neo4j_password), database=neo4j_database
+        neo4j_uri, auth=(PROJECT_WATCH_USER, PROJECT_WATCH_PASSWORD), database=PROJECT_WATCH_DATABASE
     )
 
     # Verify connection
     try:
         await neo4j_driver.verify_connectivity()
-        logger.debug(f"Connected to Neo4j at {neo4j_uri}")
+        logger.info("✓ Successfully connected to Neo4j")
+        logger.debug(f"  Neo4j endpoint: {neo4j_uri}")
+        logger.debug(f"  Database: {PROJECT_WATCH_DATABASE}")
     except Exception as e:
-        logger.error(f"Failed to connect to Neo4j: {e}")
+        logger.error(f"✗ Failed to connect to Neo4j: {e}")
         logger.error("Make sure Neo4j is running and accessible")
-        logger.error(
-            "You can start Neo4j with Neo4j Desktop (recommended) or Docker: docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j"
-        )
+        logger.error("You can start Neo4j with Neo4j Desktop")
         exit(1)
 
     # Create project configuration
+    logger.info("Configuring project...")
     if project_name:
         project_config = ProjectConfig(name=project_name, repository_path=Path(repository_path))
     else:
         project_config = ProjectConfig.from_repository_path(Path(repository_path))
-    logger.debug(f"Project name: {project_config.name}")
+    logger.info(f"✓ Project configured: {project_config.name}")
+    logger.debug(f"  Repository path: {repository_path}")
 
     # Create repository monitor with project context
+    logger.info("Initializing repository monitor...")
     repository_monitor = RepositoryMonitor(
         repo_path=Path(repository_path),
         project_name=project_config.name,
         neo4j_driver=neo4j_driver,
         file_patterns=patterns,
     )
-    logger.debug("Repository monitor created")
+    logger.info("✓ Repository monitor created")
+    logger.debug(f"  Monitoring patterns: {patterns}")
 
     # Create embeddings configuration from environment
+    logger.info("Configuring embeddings...")
     embedding_config = EmbeddingConfig.from_env()
 
     # Create embeddings provider
     if embedding_config.provider == "disabled":
         embeddings = None
-        logger.warning("Embeddings disabled - no API key configured")
-        logger.warning("Semantic search features will not be available")
+        logger.warning("⚠ Embeddings disabled - no API key configured")
+        logger.warning("  Semantic search features will not be available")
     else:
+        logger.info(f"  Provider: {embedding_config.provider}")
+        logger.info(f"  Model: {embedding_config.model}")
+        logger.debug(f"  Dimension: {embedding_config.dimension}")
+
+        # Mask API key in logs
+        if embedding_config.api_key:
+            masked_key = f"{embedding_config.api_key[:7]}...{embedding_config.api_key[-4:]}" if len(embedding_config.api_key) > 11 else "*" * len(embedding_config.api_key)
+            logger.debug(f"  API Key: {masked_key}")
+
         embeddings = create_embeddings_provider(
             provider_type=embedding_config.provider,
             api_key=embedding_config.api_key,
             model=embedding_config.model,
             dimension=embedding_config.dimension,
         )
-        
+
         if embeddings is None:
-            logger.warning("Failed to create embeddings provider - semantic search disabled")
+            logger.warning("⚠ Failed to create embeddings provider - semantic search disabled")
         else:
-            logger.debug(f"Using {embedding_config.provider} embeddings provider")
+            logger.info(f"✓ Embeddings provider initialized: {embedding_config.provider}")
 
     # Create Neo4j RAG system with project context
+    logger.info("Initializing Neo4j RAG system...")
     neo4j_rag = Neo4jRAG(
         neo4j_driver=neo4j_driver,
         project_name=project_config.name,
@@ -187,40 +244,83 @@ async def main(
         chunk_overlap=20,  # Overlapping lines
     )
     await neo4j_rag.initialize()
-    logger.debug("Neo4j RAG system initialized")
+    logger.info("✓ Neo4j RAG system initialized")
+    logger.debug("  Chunk size: 100 lines")
+    logger.debug("  Chunk overlap: 20 lines")
 
-    # Start the repository monitor to enable file watching
-    await repository_monitor.start(daemon=True)
-    logger.debug("Repository monitor started")
+    # Initialize repository (index files) before starting monitor
+    # TODO: Implement incremental indexing - only index new/changed files
+    # For now, this re-indexes everything on server start which is inefficient
+    # Future: Check Neo4j for existing index and only update changed files
+    logger.info("Initializing repository index...")
+    try:
+        files = await repository_monitor.scan_repository()
+        indexed_count = 0
+        
+        for file_info in files:
+            try:
+                # Check if file needs indexing (new or modified)
+                content = file_info.path.read_text(encoding="utf-8")
+                code_file = CodeFile(
+                    project_name=project_config.name,
+                    path=file_info.path,
+                    content=content,
+                    language=file_info.language,
+                    size=file_info.size,
+                    last_modified=file_info.last_modified,
+                )
+                await neo4j_rag.index_file(code_file)
+                indexed_count += 1
+            except UnicodeDecodeError:
+                logger.debug(f"Skipping binary file: {file_info.path}")
+            except Exception as e:
+                logger.warning(f"Failed to index {file_info.path}: {e}")
+        
+        logger.info(f"✓ Indexed {indexed_count} files")
+    except Exception as e:
+        logger.warning(f"Failed to initialize repository index: {e}")
+        logger.warning("Continuing without initial index - use initialize_repository tool to index manually")
     
+    # Start the repository monitor to enable file watching
+    logger.info("Starting repository monitor...")
+    await repository_monitor.start(daemon=True)
+    logger.info("✓ Repository monitor started in background")
+
     # Create MCP server with project context
+    logger.info("Creating MCP server...")
     mcp = create_mcp_server(
         repository_monitor=repository_monitor,
         neo4j_rag=neo4j_rag,
         project_name=project_config.name,
     )
-    logger.debug("MCP server created")
+    logger.info(f"✓ MCP server created for project: {project_config.name}")
 
     # Run the server
-    logger.debug(f"Starting server with transport: {transport}")
+    logger.info("=" * 60)
+    logger.info(f"Starting MCP server with {transport} transport...")
+    logger.info("=" * 60)
 
     try:
         match transport:
             case "http":
-                logger.debug(f"HTTP server starting on {host}:{port}{path}")
+                logger.info(f"🚀 HTTP server starting on http://{host}:{port}{path}")
                 await mcp.run_http_async(host=host, port=port, path=path, stateless_http=True)
             case "stdio":
-                logger.debug("STDIO server starting")
+                logger.info("🚀 STDIO server starting - ready for connections")
                 await mcp.run_stdio_async()
             case "sse":
-                logger.debug(f"SSE server starting on {host}:{port}{path}")
+                logger.info(f"🚀 SSE server starting on http://{host}:{port}{path}")
                 await mcp.run_sse_async(host=host, port=port, path=path)
             case _:
                 raise ValueError(f"Unsupported transport: {transport}")
     finally:
         # Cleanup
+        logger.info("Shutting down server...")
         await repository_monitor.stop()
+        logger.info("✓ Repository monitor stopped")
         await neo4j_driver.close()
+        logger.info("✓ Neo4j connection closed")
+        logger.info("Server shutdown complete")
 
 
 def cli():
@@ -245,7 +345,7 @@ Examples:
 
   # Using environment variables
   export NEO4J_URI=bolt://localhost:7687
-  export NEO4J_PASSWORD=mypassword
+  export PROJECT_WATCH_PASSWORD=mypassword
   project-watch-mcp --repository /path/to/repo
 
 Neo4j Quick Start:
@@ -253,19 +353,12 @@ Neo4j Quick Start:
   Option 2 - Docker: docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j
 
 Embedding Provider Configuration:
-  Set EMBEDDING_PROVIDER environment variable to one of: openai, local, mock
+  Set EMBEDDING_PROVIDER environment variable to one of: voyage, openai
 
   For OpenAI:
     export EMBEDDING_PROVIDER=openai
     export OPENAI_API_KEY=your-api-key
     export OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # optional
-
-  For Local API:
-    export EMBEDDING_PROVIDER=local
-    export LOCAL_EMBEDDING_API_URL=http://localhost:8080/embeddings
-
-  For Mock (default):
-    export EMBEDDING_PROVIDER=mock
         """,
     )
 
@@ -366,9 +459,9 @@ Embedding Provider Configuration:
 
     # Get configuration from environment variables or defaults
     neo4j_uri = args.neo4j_uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = args.neo4j_user or os.getenv("NEO4J_USER", "neo4j")
-    neo4j_password = args.neo4j_password or os.getenv("NEO4J_PASSWORD", "password")
-    neo4j_database = args.neo4j_database or os.getenv("NEO4J_DATABASE", "neo4j")
+    PROJECT_WATCH_USER = args.neo4j_user or os.getenv("PROJECT_WATCH_USER", "neo4j")
+    PROJECT_WATCH_PASSWORD = args.neo4j_password or os.getenv("PROJECT_WATCH_PASSWORD", "password")
+    PROJECT_WATCH_DATABASE = args.neo4j_database or os.getenv("PROJECT_WATCH_DATABASE", "neo4j")
 
     # For initialization mode, use current directory if no repository specified
     if args.initialize:
@@ -403,9 +496,9 @@ Embedding Provider Configuration:
             exit_code = asyncio.run(
                 initialize_only(
                     neo4j_uri=neo4j_uri,
-                    neo4j_user=neo4j_user,
-                    neo4j_password=neo4j_password,
-                    neo4j_database=neo4j_database,
+                    PROJECT_WATCH_USER=PROJECT_WATCH_USER,
+                    PROJECT_WATCH_PASSWORD=PROJECT_WATCH_PASSWORD,
+                    PROJECT_WATCH_DATABASE=PROJECT_WATCH_DATABASE,
                     repository_path=str(repo_path.absolute()),
                     project_name=project_name,
                     verbose=args.verbose,
@@ -417,9 +510,9 @@ Embedding Provider Configuration:
             asyncio.run(
                 main(
                     neo4j_uri=neo4j_uri,
-                    neo4j_user=neo4j_user,
-                    neo4j_password=neo4j_password,
-                    neo4j_database=neo4j_database,
+                    PROJECT_WATCH_USER=PROJECT_WATCH_USER,
+                    PROJECT_WATCH_PASSWORD=PROJECT_WATCH_PASSWORD,
+                    PROJECT_WATCH_DATABASE=PROJECT_WATCH_DATABASE,
                     repository_path=str(repo_path.absolute()),
                     project_name=project_name,
                     transport=transport,

@@ -83,9 +83,9 @@ class RepositoryInitializer:
     def __init__(
         self,
         neo4j_uri: str,
-        neo4j_user: str,
-        neo4j_password: str,
-        neo4j_database: str = "memory",
+        PROJECT_WATCH_USER: str,
+        PROJECT_WATCH_PASSWORD: str,
+        PROJECT_WATCH_DATABASE: str = "memory",
         repository_path: Path | None = None,
         project_name: str | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -95,17 +95,17 @@ class RepositoryInitializer:
 
         Args:
             neo4j_uri: Neo4j connection URI
-            neo4j_user: Neo4j username
-            neo4j_password: Neo4j password
-            neo4j_database: Neo4j database name
+            PROJECT_WATCH_USER: Neo4j username
+            PROJECT_WATCH_PASSWORD: Neo4j password
+            PROJECT_WATCH_DATABASE: Neo4j database name
             repository_path: Path to repository (defaults to current directory)
             project_name: Project name (defaults to repository directory name)
             progress_callback: Optional callback for progress reporting
         """
         self.neo4j_uri = neo4j_uri
-        self.neo4j_user = neo4j_user
-        self.neo4j_password = neo4j_password
-        self.neo4j_database = neo4j_database
+        self.PROJECT_WATCH_USER = PROJECT_WATCH_USER
+        self.PROJECT_WATCH_PASSWORD = PROJECT_WATCH_PASSWORD
+        self.PROJECT_WATCH_DATABASE = PROJECT_WATCH_DATABASE
         self.repository_path = repository_path or Path.cwd()
         self.project_name = project_name or self.repository_path.name
         self.progress_callback = progress_callback
@@ -130,8 +130,8 @@ class RepositoryInitializer:
             # Create Neo4j driver
             self._driver = AsyncGraphDatabase.driver(
                 self.neo4j_uri,
-                auth=(self.neo4j_user, self.neo4j_password),
-                database=self.neo4j_database,
+                auth=(self.PROJECT_WATCH_USER, self.PROJECT_WATCH_PASSWORD),
+                database=self.PROJECT_WATCH_DATABASE,
             )
 
             # Verify connectivity
@@ -227,14 +227,61 @@ class RepositoryInitializer:
                         message="No files found matching patterns",
                     )
 
-                self._report_progress(10.0, f"Found {total_files} files to index")
+                self._report_progress(5.0, f"Found {total_files} files in repository")
 
-                # Index each file
+                # Check if repository is already indexed (incremental indexing)
+                is_indexed = await self._neo4j_rag.is_repository_indexed(self.project_name)
+                
+                if is_indexed:
+                    self._report_progress(10.0, "Repository already indexed, checking for changes...")
+                    
+                    # Get indexed files with timestamps
+                    indexed_files = await self._neo4j_rag.get_indexed_files(self.project_name)
+                    
+                    # Detect changes
+                    new_files, modified_files, deleted_paths = await self._neo4j_rag.detect_changed_files(
+                        files, indexed_files
+                    )
+                    
+                    # Calculate statistics
+                    unchanged_count = total_files - len(new_files) - len(modified_files)
+                    
+                    logger.info(
+                        f"Incremental indexing: {len(new_files)} new, "
+                        f"{len(modified_files)} modified, {len(deleted_paths)} deleted, "
+                        f"{unchanged_count} unchanged"
+                    )
+                    
+                    # Remove deleted files
+                    if deleted_paths:
+                        self._report_progress(15.0, f"Removing {len(deleted_paths)} deleted files...")
+                        await self._neo4j_rag.remove_files(self.project_name, deleted_paths)
+                    
+                    # Combine files to index (new + modified)
+                    files_to_index = new_files + modified_files
+                    
+                    if not files_to_index:
+                        self._report_progress(100.0, "No changes detected")
+                        return InitializationResult(
+                            indexed=0,
+                            total=total_files,
+                            message=f"No changes detected. {unchanged_count} files unchanged.",
+                        )
+                    
+                    self._report_progress(20.0, f"Indexing {len(files_to_index)} changed files...")
+                    
+                else:
+                    # Full indexing for new repository
+                    self._report_progress(10.0, f"New repository, indexing all {total_files} files...")
+                    files_to_index = files
+                    unchanged_count = 0
+
+                # Index files that need updating
                 indexed_count = 0
                 skipped_files = []
 
-                for i, file_info in enumerate(files):
-                    progress = 10.0 + (80.0 * i / total_files)
+                for i, file_info in enumerate(files_to_index):
+                    progress = 20.0 + (70.0 * i / len(files_to_index))
                     # Handle potential symlinks in temp directories
                     try:
                         file_path_str = str(file_info.path.relative_to(self.repository_path))
@@ -243,7 +290,7 @@ class RepositoryInitializer:
                         file_path_str = str(file_info.path.resolve().relative_to(self.repository_path.resolve()))
 
                     self._report_progress(
-                        progress, f"Indexing {file_path_str} ({i+1}/{total_files})"
+                        progress, f"Indexing {file_path_str} ({i+1}/{len(files_to_index)})"
                     )
 
                     try:
@@ -273,10 +320,10 @@ class RepositoryInitializer:
 
                 self._report_progress(90.0, "Starting file monitoring...")
 
-                # Start monitoring
+                # Start monitoring only if requested
                 monitoring_started = False
-                try:
-                    if persistent_monitoring:
+                if persistent_monitoring:
+                    try:
                         # Use monitoring manager for persistent monitoring
                         manager = MonitoringManager(
                             repo_path=self.repository_path,
@@ -286,23 +333,37 @@ class RepositoryInitializer:
                         monitoring_started = await manager.start_persistent_monitoring()
                         if monitoring_started:
                             self._report_progress(95.0, "Persistent monitoring started")
-                    else:
-                        # Normal monitoring (stops when process exits)
-                        await self._repository_monitor.start()
-                        monitoring_started = True
-                        self._report_progress(95.0, "Monitoring started")
-                except Exception as e:
-                    logger.warning(f"Failed to start monitoring: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to start monitoring: {e}")
+                    
+                self._report_progress(95.0, "Indexing complete")
 
                 self._report_progress(100.0, "Initialization complete")
 
                 # Prepare result message
-                if indexed_count == total_files:
-                    message = (
-                        f"Repository initialized. Indexed {indexed_count}/{total_files} files."
-                    )
+                if is_indexed:
+                    # Incremental indexing message
+                    if indexed_count == 0:
+                        message = f"Repository up to date. {unchanged_count} files unchanged."
+                    else:
+                        new_count = len(new_files) if 'new_files' in locals() else 0
+                        modified_count = len(modified_files) if 'modified_files' in locals() else 0
+                        deleted_count = len(deleted_paths) if 'deleted_paths' in locals() else 0
+                        
+                        message = (
+                            f"Incremental update complete. "
+                            f"Indexed {indexed_count} files "
+                            f"({new_count} new, {modified_count} modified), "
+                            f"{unchanged_count} unchanged."
+                        )
+                        if deleted_count > 0:
+                            message += f" Removed {deleted_count} deleted files."
                 else:
-                    message = f"Repository initialized. Indexed {indexed_count}/{total_files} files ({len(skipped_files)} skipped)."
+                    # Full indexing message
+                    if indexed_count == total_files:
+                        message = f"Repository initialized. Indexed {indexed_count}/{total_files} files."
+                    else:
+                        message = f"Repository initialized. Indexed {indexed_count}/{total_files} files ({len(skipped_files)} skipped)."
 
                 return InitializationResult(
                     indexed=indexed_count,

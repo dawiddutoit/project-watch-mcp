@@ -855,6 +855,154 @@ class Neo4jRAG:
             "languages": [],
         }
 
+    async def is_repository_indexed(self, project_name: str) -> bool:
+        """
+        Check if a repository is already indexed in Neo4j.
+        
+        Args:
+            project_name: Name of the project to check
+            
+        Returns:
+            True if the repository has indexed files, False otherwise
+        """
+        query = """
+        MATCH (f:CodeFile {project_name: $project_name})
+        RETURN count(f) as file_count
+        """
+        
+        result = await self.neo4j_driver.execute_query(
+            query, 
+            {"project_name": project_name},
+            routing_control=RoutingControl.READ
+        )
+        
+        if result.records and len(result.records) > 0:
+            file_count = result.records[0].get("file_count", 0)
+            return file_count > 0
+        return False
+    
+    async def get_indexed_files(self, project_name: str) -> dict[Path, datetime]:
+        """
+        Get a list of indexed files with their timestamps.
+        
+        Args:
+            project_name: Name of the project
+            
+        Returns:
+            Dictionary mapping file paths to their last modified timestamps
+        """
+        query = """
+        MATCH (f:CodeFile {project_name: $project_name})
+        RETURN f.path as path, f.last_modified as last_modified
+        """
+        
+        result = await self.neo4j_driver.execute_query(
+            query,
+            {"project_name": project_name},
+            routing_control=RoutingControl.READ
+        )
+        
+        file_map = {}
+        for record in result.records:
+            path = Path(record["path"])
+            last_modified_str = record.get("last_modified")
+            
+            # Handle missing or invalid timestamps
+            if last_modified_str:
+                try:
+                    # Parse ISO format timestamp
+                    last_modified = datetime.fromisoformat(last_modified_str)
+                except (ValueError, TypeError):
+                    # Use a very old timestamp for files with invalid timestamps
+                    last_modified = datetime.min
+            else:
+                # Use a very old timestamp for files without timestamps
+                last_modified = datetime.min
+                
+            file_map[path] = last_modified
+            
+        return file_map
+    
+    async def detect_changed_files(
+        self, 
+        current_files: list[Any],  # List[FileInfo]
+        indexed_files: dict[Path, datetime]
+    ) -> tuple[list[Any], list[Any], list[Path]]:
+        """
+        Compare current files with indexed files to detect changes.
+        
+        Args:
+            current_files: List of FileInfo objects representing current repository state
+            indexed_files: Dictionary of indexed file paths to timestamps
+            
+        Returns:
+            Tuple of (new_files, modified_files, deleted_paths)
+        """
+        new_files = []
+        modified_files = []
+        deleted_paths = []
+        
+        # Track which indexed files we've seen
+        seen_indexed_files = set()
+        
+        # Check current files against indexed files
+        for file_info in current_files:
+            file_path = file_info.path
+            
+            if file_path not in indexed_files:
+                # This is a new file
+                new_files.append(file_info)
+            else:
+                # File exists in index, check if modified
+                seen_indexed_files.add(file_path)
+                indexed_timestamp = indexed_files[file_path]
+                
+                # Compare timestamps (files are modified if current timestamp is newer)
+                if file_info.last_modified > indexed_timestamp:
+                    modified_files.append(file_info)
+                # If timestamps are equal or older, file is unchanged (ignore it)
+        
+        # Find deleted files (in index but not in current files)
+        for indexed_path in indexed_files:
+            if indexed_path not in seen_indexed_files:
+                deleted_paths.append(indexed_path)
+        
+        return new_files, modified_files, deleted_paths
+    
+    async def remove_files(self, project_name: str, file_paths: list[Path]):
+        """
+        Remove files and their chunks from the Neo4j index.
+        
+        Args:
+            project_name: Name of the project
+            file_paths: List of file paths to remove
+        """
+        if not file_paths:
+            # Nothing to remove
+            return
+            
+        # Convert paths to strings for the query
+        path_strings = [str(path) for path in file_paths]
+        
+        # Delete files and their chunks in a single query
+        query = """
+        UNWIND $paths as path
+        MATCH (f:CodeFile {project_name: $project_name, path: path})
+        OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:CodeChunk)
+        DETACH DELETE f, c
+        """
+        
+        await self.neo4j_driver.execute_query(
+            query,
+            {
+                "project_name": project_name,
+                "paths": path_strings
+            },
+            routing_control=RoutingControl.WRITE
+        )
+        
+        logger.info(f"Removed {len(file_paths)} files from project {project_name}")
+
     async def close(self):
         """
         Close the Neo4j RAG system and clean up resources.

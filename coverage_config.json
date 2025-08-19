@@ -1,0 +1,50 @@
+{
+  "global_threshold": 80.0,
+  "critical_threshold": 85.0,
+  "regression_tolerance": 5.0,
+  "component_thresholds": {
+    "server": 85.0,
+    "repository_monitor": 85.0,
+    "neo4j_rag": 85.0,
+    "complexity": 90.0,
+    "utils": 75.0,
+    "embeddings": 70.0,
+    "core": 85.0,
+    "mcp_tools": 70.0,
+    "initializer": 75.0
+  },
+  "critical_files": [
+    "server.py",
+    "repository_monitor.py",
+    "neo4j_rag.py",
+    "complexity_analyzer.py",
+    "session_manager.py",
+    "monitoring_manager.py"
+  ],
+  "exclude_patterns": [
+    "__pycache__",
+    "*.pyc",
+    "test_*.py",
+    "*_test.py",
+    "conftest.py",
+    "__init__.py"
+  ],
+  "coverage_targets_by_phase": {
+    "phase_1": {
+      "date": "2025-01-15",
+      "target": 65.0
+    },
+    "phase_2": {
+      "date": "2025-01-20",
+      "target": 75.0
+    },
+    "phase_3": {
+      "date": "2025-01-25",
+      "target": 80.0
+    },
+    "phase_4": {
+      "date": "2025-02-01",
+      "target": 85.0
+    }
+  }
+}

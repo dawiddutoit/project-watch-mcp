@@ -44,9 +44,9 @@ class TestCLIMonitoring:
                 # Run CLI initialization
                 exit_code = await initialize_only(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="test",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="test",
                     repository_path=str(temp_repo),
                     project_name="test_cli_project",
                     verbose=False,
@@ -79,9 +79,9 @@ class TestCLIMonitoring:
                 # Run with verbose mode
                 exit_code = await initialize_only(
                     neo4j_uri="bolt://localhost:7687",
-                    neo4j_user="neo4j",
-                    neo4j_password="password",
-                    neo4j_database="test",
+                    PROJECT_WATCH_USER="neo4j",
+                    PROJECT_WATCH_PASSWORD="password",
+                    PROJECT_WATCH_DATABASE="test",
                     repository_path=str(temp_repo),
                     project_name="test_verbose",
                     verbose=True,
@@ -107,9 +107,9 @@ class TestCLIMonitoring:
         # Test with invalid Neo4j connection
         exit_code = await initialize_only(
             neo4j_uri="bolt://invalid:7687",
-            neo4j_user="neo4j",
-            neo4j_password="password",
-            neo4j_database="test",
+            PROJECT_WATCH_USER="neo4j",
+            PROJECT_WATCH_PASSWORD="password",
+            PROJECT_WATCH_DATABASE="test",
             repository_path="/nonexistent/path",
             project_name="test_error",
             verbose=False,

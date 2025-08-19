@@ -147,6 +147,7 @@ class RepositoryMonitor:
         self.is_running = False
         self._watch_task: asyncio.Task | None = None
         self._change_queue: asyncio.Queue[FileChangeEvent] = asyncio.Queue()
+        self.monitoring_since: datetime | None = None
 
     def _load_gitignore(self) -> PathSpec | None:
         """Load patterns from .gitignore file if it exists."""
@@ -293,6 +294,7 @@ class RepositoryMonitor:
             return
 
         self.is_running = True
+        self.monitoring_since = datetime.now()
         self._watch_task = asyncio.create_task(self._watch_loop())
         
         # Set the task name for easier debugging
@@ -389,3 +391,30 @@ class RepositoryMonitor:
             except asyncio.QueueEmpty:
                 break
         return changes
+    
+    async def get_file_info(self, file_path: Path) -> FileInfo | None:
+        """
+        Get information about a specific file.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            FileInfo object or None if file doesn't exist or shouldn't be included
+        """
+        if not file_path.exists():
+            return None
+            
+        if not self._should_include_file(file_path):
+            return None
+            
+        try:
+            stat = file_path.stat()
+            return FileInfo(
+                path=file_path,
+                size=stat.st_size,
+                last_modified=datetime.fromtimestamp(stat.st_mtime),
+            )
+        except OSError as e:
+            logger.warning(f"Could not stat file {file_path}: {e}")
+            return None

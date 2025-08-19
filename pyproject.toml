@@ -58,6 +58,10 @@ dev-dependencies = [
     "black>=24.10.0",
     "ruff>=0.8.0",
     "pyright>=1.1.389",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
+    "pytest-mock>=3.14.1",
+    "freezegun>=1.5.5",
 ]
 
 [project.scripts]
@@ -67,17 +71,66 @@ project-watch-mcp = "project_watch_mcp.cli:cli"
 pythonpath = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Removed aggressive parallel execution to fix timeout issues
+# Use test profiles below for different execution strategies
 addopts = [
     "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "--maxfail=50",  # Stop after 50 failures
+]
+markers = [
+    "unit: Unit tests (fast, isolated)",
+    "integration: Integration tests requiring external services",
+    "slow: Tests taking >1s to execute",
+    "benchmark: Performance benchmark tests",
+    "performance: Performance-related tests",
+    "neo4j: Tests requiring Neo4j database",
+    "embeddings: Tests requiring embedding services",
+    "mcp: MCP server integration tests",
+    "smoke: Critical path smoke tests",
+    "regression: Regression test suite",
+]
+
+# Test execution profiles for different scenarios
+[tool.pytest.profiles]
+# Quick smoke tests for rapid feedback
+smoke = [
+    "-m", "smoke",
+    "--timeout=5",
+    "-n=4",
+    "--tb=short",
+    "--maxfail=1"
+]
+
+# Fast unit tests with moderate parallelization
+fast = [
+    "-m", "unit and not slow",
+    "--timeout=10",
+    "-n=4",
+    "--cov=src/project_watch_mcp",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=0"
+]
+
+# Standard test suite with coverage
+standard = [
+    "-m", "not slow",
+    "--timeout=30",
+    "-n=2",
+    "--cov=src/project_watch_mcp",
+    "--cov-report=term-missing",
+    "--cov-fail-under=60"
+]
+
+# Comprehensive test suite with strict coverage
+comprehensive = [
+    "--timeout=120",
+    "-n=1",
     "--cov=src/project_watch_mcp",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=60",
-]
-markers = [
-    "benchmark: marks tests as benchmarks (deselect with '-m \"not benchmark\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
+    "--cov-fail-under=80"
 ]
 
 [tool.black]

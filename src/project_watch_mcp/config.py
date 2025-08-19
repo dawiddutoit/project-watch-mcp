@@ -152,9 +152,9 @@ class Neo4jConfig:
         """Create configuration from environment variables."""
         return cls(
             uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.getenv("NEO4J_USERNAME", "neo4j"),
-            password=os.getenv("NEO4J_PASSWORD", "password"),
-            database=os.getenv("NEO4J_DATABASE", "neo4j"),
+            username=os.getenv("PROJECT_WATCH_USERNAME", "neo4j"),
+            password=os.getenv("PROJECT_WATCH_PASSWORD", "password"),
+            database=os.getenv("PROJECT_WATCH_DATABASE", "neo4j"),
         )
 
 
