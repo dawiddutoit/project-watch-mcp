@@ -92,7 +92,7 @@ async def initialize_only(
         print(f"Indexed: {result.indexed}/{result.total} files")
         if result.skipped:
             print(f"Skipped: {len(result.skipped)} files")
-        print(f"Status: Initialization complete")
+        print("Status: Initialization complete")
 
         return 0
 
@@ -124,6 +124,7 @@ async def main(
     port: int = 8000,
     path: str = "/mcp/",
     file_patterns: str = "*.py,*.js,*.ts,*.java,*.go,*.rs,*.md,*.json,*.yaml,*.yml,*.toml",
+    skip_initial_index: bool = False,
 ) -> None:
     """
     Main entry point for the Project Watch MCP server.
@@ -140,6 +141,7 @@ async def main(
         port: HTTP/SSE server port
         path: HTTP/SSE server path
         file_patterns: Comma-separated file patterns to monitor
+        skip_initial_index: Skip initial repository indexing on startup
     """
     # Log server startup with configuration
     logger.info("=" * 60)
@@ -248,39 +250,62 @@ async def main(
     logger.debug("  Chunk size: 100 lines")
     logger.debug("  Chunk overlap: 20 lines")
 
-    # Initialize repository (index files) before starting monitor
-    # TODO: Implement incremental indexing - only index new/changed files
-    # For now, this re-indexes everything on server start which is inefficient
-    # Future: Check Neo4j for existing index and only update changed files
-    logger.info("Initializing repository index...")
-    try:
-        files = await repository_monitor.scan_repository()
-        indexed_count = 0
-        
-        for file_info in files:
-            try:
-                # Check if file needs indexing (new or modified)
-                content = file_info.path.read_text(encoding="utf-8")
-                code_file = CodeFile(
-                    project_name=project_config.name,
-                    path=file_info.path,
-                    content=content,
-                    language=file_info.language,
-                    size=file_info.size,
-                    last_modified=file_info.last_modified,
-                )
-                await neo4j_rag.index_file(code_file)
-                indexed_count += 1
-            except UnicodeDecodeError:
-                logger.debug(f"Skipping binary file: {file_info.path}")
-            except Exception as e:
-                logger.warning(f"Failed to index {file_info.path}: {e}")
-        
-        logger.info(f"✓ Indexed {indexed_count} files")
-    except Exception as e:
-        logger.warning(f"Failed to initialize repository index: {e}")
-        logger.warning("Continuing without initial index - use initialize_repository tool to index manually")
-    
+    # Background indexing function
+    async def background_index_repository():
+        """Perform repository indexing in the background using batch operations."""
+        logger.info("Starting background repository indexing...")
+        try:
+            files = await repository_monitor.scan_repository()
+            code_files = []
+            skipped_count = 0
+
+            # Collect all files into CodeFile objects first
+            for file_info in files:
+                try:
+                    # Check if file needs indexing (new or modified)
+                    content = file_info.path.read_text(encoding="utf-8")
+                    code_file = CodeFile(
+                        project_name=project_config.name,
+                        path=file_info.path,
+                        content=content,
+                        language=file_info.language,
+                        size=file_info.size,
+                        last_modified=file_info.last_modified,
+                    )
+                    code_files.append(code_file)
+                except UnicodeDecodeError:
+                    logger.debug(f"Skipping binary file: {file_info.path}")
+                    skipped_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to prepare {file_info.path} for indexing: {e}")
+                    skipped_count += 1
+
+            # Use batch indexing for better performance
+            if code_files:
+                await neo4j_rag.batch_index_files(code_files)
+                logger.info(f"✓ Background indexing complete: indexed {len(code_files)} files")
+            else:
+                logger.info("✓ No files to index")
+
+            if skipped_count > 0:
+                logger.info(f"Skipped {skipped_count} files during indexing")
+        except Exception as e:
+            logger.error(f"Background indexing failed: {e}")
+            logger.error("Use the initialize_repository tool to manually trigger indexing if needed")
+
+    # Start repository indexing in background (non-blocking)
+    if skip_initial_index:
+        logger.info("⚠ Skipping initial repository indexing (--skip-initial-index flag set)")
+        logger.info("  Files will be indexed as they are modified via file monitoring")
+        logger.info("  Use the initialize_repository tool to manually trigger indexing if needed")
+    else:
+        logger.info("Starting repository index in background (non-blocking)...")
+        # Create background task for indexing
+        indexing_task = asyncio.create_task(background_index_repository())
+        # Set task name for better debugging
+        indexing_task.set_name("background-indexing")
+        logger.info("✓ Background indexing task started")
+
     # Start the repository monitor to enable file watching
     logger.info("Starting repository monitor...")
     await repository_monitor.start(daemon=True)
@@ -342,6 +367,12 @@ Examples:
 
   # Monitor specific file types only
   project-watch-mcp --repository /path/to/repo --file-patterns "*.py,*.js,*.ts"
+  
+  # Skip initial indexing (indexing happens in background by default)
+  project-watch-mcp --repository /path/to/repo --skip-initial-index
+  
+  # Check indexing status (when server is running)
+  # Use the 'indexing_status' tool via MCP to check background indexing progress
 
   # Using environment variables
   export NEO4J_URI=bolt://localhost:7687
@@ -408,6 +439,13 @@ Embedding Provider Configuration:
         "--initialize",
         action="store_true",
         help="Initialize repository and exit (mutually exclusive with --transport)",
+    )
+
+    # Skip initial indexing flag
+    parser.add_argument(
+        "--skip-initial-index",
+        action="store_true",
+        help="Skip initial repository indexing on startup (useful for MCP server to avoid timeout)",
     )
 
     # Server arguments
@@ -520,6 +558,7 @@ Embedding Provider Configuration:
                     port=port,
                     path=path,
                     file_patterns=file_patterns,
+                    skip_initial_index=args.skip_initial_index,
                 )
             )
     except KeyboardInterrupt:

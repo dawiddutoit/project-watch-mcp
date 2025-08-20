@@ -3,6 +3,7 @@
 import asyncio
 import fnmatch
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -90,6 +91,97 @@ class FileChangeEvent:
             self.timestamp = datetime.now()
 
 
+class DebouncedChangeProcessor:
+    """Processes file changes with debouncing to reduce redundant operations."""
+
+    def __init__(self, debounce_delay: float = 0.5):
+        """
+        Initialize the debounced change processor.
+        
+        Args:
+            debounce_delay: Time in seconds to wait before processing a change (default: 0.5)
+        """
+        self.debounce_delay = debounce_delay
+        self._pending_changes: dict[Path, FileChangeEvent] = {}
+        self._last_process_time: dict[Path, float] = {}
+        self._lock = asyncio.Lock()
+
+    async def add_change(self, event: FileChangeEvent) -> bool:
+        """
+        Add a change event, debouncing if necessary.
+        
+        Args:
+            event: The file change event to process
+            
+        Returns:
+            True if the change should be processed immediately, False if debounced
+        """
+        async with self._lock:
+            path = event.path
+            current_time = time.time()
+
+            # Check if we've processed this file recently
+            last_time = self._last_process_time.get(path, 0)
+            time_since_last = current_time - last_time
+
+            if time_since_last < self.debounce_delay:
+                # Too soon since last process, debounce this change
+                self._pending_changes[path] = event
+                logger.debug(f"Debouncing change for {path} (last processed {time_since_last:.2f}s ago)")
+                return False
+
+            # Enough time has passed, process this change
+            self._last_process_time[path] = current_time
+            # Remove from pending if it was there
+            self._pending_changes.pop(path, None)
+            return True
+
+    async def get_pending_changes(self) -> list[FileChangeEvent]:
+        """
+        Get all pending changes that have been debounced long enough.
+        
+        Returns:
+            List of file change events ready to be processed
+        """
+        async with self._lock:
+            current_time = time.time()
+            ready_changes = []
+
+            for path, event in list(self._pending_changes.items()):
+                last_time = self._last_process_time.get(path, 0)
+                time_since_last = current_time - last_time
+
+                if time_since_last >= self.debounce_delay:
+                    # This change is ready to be processed
+                    ready_changes.append(event)
+                    self._last_process_time[path] = current_time
+                    del self._pending_changes[path]
+
+            return ready_changes
+
+    def clear_history(self, older_than: float = 60.0):
+        """
+        Clear old processing history to prevent memory growth.
+        
+        Args:
+            older_than: Clear entries older than this many seconds (default: 60)
+        """
+        current_time = time.time()
+        cutoff_time = current_time - older_than
+
+        # Remove old entries from last_process_time
+        self._last_process_time = {
+            path: timestamp
+            for path, timestamp in self._last_process_time.items()
+            if timestamp > cutoff_time
+        }
+
+    @property
+    def pending_count(self) -> int:
+        """Get the number of pending changes."""
+        return len(self._pending_changes)
+
+
 class RepositoryMonitor:
     """Monitors a repository for file changes using watchfiles."""
 
@@ -101,6 +193,7 @@ class RepositoryMonitor:
         file_patterns: list[str] | None = None,
         ignore_patterns: list[str] | None = None,
         use_gitignore: bool = True,
+        debounce_delay: float = 0.5,
     ):
         """
         Initialize the repository monitor.
@@ -112,12 +205,16 @@ class RepositoryMonitor:
             file_patterns: List of file patterns to include (e.g., ["*.py", "*.js"])
             ignore_patterns: List of patterns to ignore (in addition to .gitignore)
             use_gitignore: Whether to use the project's .gitignore file
+            debounce_delay: Time in seconds to debounce file changes (default: 0.5)
         """
         self.repo_path = Path(repo_path).resolve()
         self.project_name = project_name
         self.neo4j_driver = neo4j_driver
         self.file_patterns = file_patterns or ["*"]
         self.use_gitignore = use_gitignore
+
+        # Initialize debouncing processor
+        self.debounce_processor = DebouncedChangeProcessor(debounce_delay)
 
         # Default ignore patterns (used if no .gitignore or as fallback)
         default_ignore_patterns = [
@@ -132,6 +229,13 @@ class RepositoryMonitor:
             "build",
             "dist",
             "*.egg-info",
+            # Lock files and large generated files
+            "*.lock",
+            "package-lock.json",
+            "yarn.lock",
+            "poetry.lock",
+            "Pipfile.lock",
+            "uv.lock",
         ]
 
         # Load gitignore patterns if available
@@ -220,12 +324,12 @@ class RepositoryMonitor:
         """Check if a directory should be skipped entirely."""
         # Always skip these directories
         skip_dirs = {'.git', '.idea', '__pycache__', 'node_modules', '.venv', 'venv', 'env', '.ruff_cache', '.mypy_cache', '.pytest_cache'}
-        
+
         # Check if any parent or the directory itself is in skip list
         for part in dir_path.parts:
             if part in skip_dirs:
                 return True
-                
+
         # Check gitignore patterns for directories
         if self.gitignore_spec:
             try:
@@ -235,7 +339,7 @@ class RepositoryMonitor:
                     return True
             except ValueError:
                 pass
-                
+
         return False
 
     async def scan_repository(self) -> list[FileInfo]:
@@ -246,13 +350,13 @@ class RepositoryMonitor:
             List of FileInfo objects for matching files
         """
         files = []
-        
+
         # Use a stack for iterative directory traversal to avoid recursing into ignored dirs
         dirs_to_scan = [self.repo_path]
-        
+
         while dirs_to_scan:
             current_dir = dirs_to_scan.pop()
-            
+
             try:
                 for item in current_dir.iterdir():
                     if item.is_dir():
@@ -296,10 +400,10 @@ class RepositoryMonitor:
         self.is_running = True
         self.monitoring_since = datetime.now()
         self._watch_task = asyncio.create_task(self._watch_loop())
-        
+
         # Set the task name for easier debugging
         self._watch_task.set_name(f"monitor_{self.project_name}")
-        
+
         logger.info(f"Started monitoring repository: {self.repo_path} (daemon={daemon})")
 
     async def stop(self):
@@ -391,7 +495,7 @@ class RepositoryMonitor:
             except asyncio.QueueEmpty:
                 break
         return changes
-    
+
     async def get_file_info(self, file_path: Path) -> FileInfo | None:
         """
         Get information about a specific file.
@@ -404,10 +508,10 @@ class RepositoryMonitor:
         """
         if not file_path.exists():
             return None
-            
+
         if not self._should_include_file(file_path):
             return None
-            
+
         try:
             stat = file_path.stat()
             return FileInfo(

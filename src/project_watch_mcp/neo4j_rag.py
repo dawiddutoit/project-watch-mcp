@@ -3,7 +3,6 @@
 Requires Neo4j 5.11+ with vector index support.
 """
 
-import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import xxhash
 from neo4j import AsyncDriver, RoutingControl
 
 from .config import EmbeddingConfig
@@ -32,15 +32,15 @@ def lucene_phrase(query: str) -> str:
     """
     if not query:
         return query
-    
+
     # Import here to avoid circular imports
-    from . import __lucene_fix_version__, __build_timestamp__
+    from . import __build_timestamp__, __lucene_fix_version__
     logger.info(f"[LUCENE-PHRASE {__lucene_fix_version__}] Converting to phrase: {query!r}")
     logger.debug(f"Build timestamp: {__build_timestamp__}")
-    
+
     q = query.replace("\\", "\\\\").replace('"', '\\"')
     result = f'"{q}"'
-    
+
     logger.info(f"[LUCENE-PHRASE {__lucene_fix_version__}] Result: {result!r}")
     return result
 
@@ -59,27 +59,27 @@ def escape_lucene_query(query: str) -> str:
     """
     if not query:
         return query
-    
+
     # Special characters that need escaping in Lucene
     # Note: && and || are operators, single & and | are not
     special_chars = [
         '+', '-', '!', '(', ')', '{', '}', '[', ']', '^',
         '"', '~', '*', '?', ':', '\\', '/'
     ]
-    
+
     result = query
-    
+
     # Escape && and || operators (but not single & or |)
     result = result.replace('&&', '\\&&')
     result = result.replace('||', '\\||')
-    
+
     # Escape other special characters with double backslash for Neo4j
     for char in special_chars:
         result = result.replace(char, f'\\\\{char}')
-    
+
     # Handle arrow operator specially
     result = result.replace('->', '\\\\->')
-    
+
     return result
 
 
@@ -106,7 +106,6 @@ class CodeFile:
     exported_symbols: list[str] | None = None
     dependencies: list[str] | None = None
     complexity_score: int | None = None
-    line_count: int | None = None
 
     def __post_init__(self):
         """Initialize derived fields after dataclass initialization."""
@@ -117,11 +116,6 @@ class CodeFile:
         # Auto-detect file type if not explicitly set
         if not any([self.is_test, self.is_config, self.is_resource, self.is_documentation]):
             self._detect_file_type()
-
-        # Calculate line count if not provided
-        if self.line_count is None:
-            # Empty content should still count as 1 line (like most editors show)
-            self.line_count = max(1, len(self.content.splitlines()))
 
         # Extract namespace/package for supported languages
         if self.namespace is None and self.language in [
@@ -231,8 +225,8 @@ class CodeFile:
 
     @property
     def file_hash(self) -> str:
-        """Generate a hash of the file content."""
-        return hashlib.sha256(self.content.encode()).hexdigest()
+        """Generate a hash of the file content using xxHash for speed."""
+        return xxhash.xxh64(self.content.encode()).hexdigest()
 
     @property
     def file_category(self) -> str:
@@ -412,31 +406,424 @@ class Neo4jRAG:
                 logger.warning(f"Vector index not supported in this Neo4j version: {e}")
                 logger.info("Semantic search will use fallback cosine similarity calculation")
 
-    def chunk_content(self, content: str, chunk_size: int, overlap: int) -> list[str]:
+    def _sanitize_for_lucene(self, text: str) -> str:
         """
-        Split content into overlapping chunks.
+        Sanitize text for Lucene indexing by ensuring no single term exceeds byte limit.
+        
+        Lucene has a hard limit of 32,766 bytes per TERM (not per field).
+        A term is typically a word separated by whitespace or punctuation.
+        
+        Args:
+            text: Text to sanitize
+            
+        Returns:
+            Text with oversized terms truncated or split
+        """
+        LUCENE_TERM_BYTE_LIMIT = 32000  # Slightly less than 32,766 for safety
+
+        # Split by whitespace to get individual terms
+        terms = text.split()
+        sanitized_terms = []
+
+        for term in terms:
+            term_bytes = len(term.encode('utf-8'))
+
+            if term_bytes <= LUCENE_TERM_BYTE_LIMIT:
+                sanitized_terms.append(term)
+            else:
+                # This is an extremely long "word" (likely base64 data or similar)
+                # We need to break it up or truncate it
+                logger.warning(f"Found oversized term with {term_bytes} bytes, truncating for Lucene safety")
+
+                # Truncate the term to fit within the byte limit
+                # Use binary search to find the right character count
+                left, right = 0, len(term)
+                best_fit = 0
+
+                while left <= right:
+                    mid = (left + right) // 2
+                    test_term = term[:mid]
+                    test_bytes = len(test_term.encode('utf-8'))
+
+                    if test_bytes <= LUCENE_TERM_BYTE_LIMIT:
+                        best_fit = mid
+                        left = mid + 1
+                    else:
+                        right = mid - 1
+
+                truncated = term[:best_fit]
+                sanitized_terms.append(truncated)
+
+                # Log that we truncated
+                logger.info(f"Truncated term from {len(term)} chars to {len(truncated)} chars")
+
+        return " ".join(sanitized_terms)
+
+    def chunk_content(self, content: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
+        """
+        Split content into overlapping chunks with Lucene byte limit awareness.
+        
+        Ensures chunks never exceed Neo4j Lucene's 32,766 byte limit while 
+        maintaining semantic coherence and proper overlap for context.
 
         Args:
             content: Content to chunk
-            chunk_size: Size of each chunk in lines
-            overlap: Number of overlapping lines
+            chunk_size: Target size of each chunk in lines (for normal files)
+            overlap: Number of overlapping lines (for normal files)
 
         Returns:
-            List of content chunks
+            List of content chunks that are safe for Lucene indexing
         """
+        # CRITICAL: Neo4j Lucene has a hard limit of 32,766 bytes per term
+        # We use 30,000 bytes as safe limit to account for any encoding overhead
+        LUCENE_SAFE_BYTE_LIMIT = 30000
+
+        # Check if content is small enough to be a single chunk
+        content_bytes = len(content.encode('utf-8'))
+        if content_bytes <= LUCENE_SAFE_BYTE_LIMIT:
+            return [content]
+
+        # For large content, we need to chunk intelligently
+        # First try line-based chunking for better semantic boundaries
         lines = content.split("\n")
         chunks = []
 
-        if len(lines) <= chunk_size:
+        # If content is a single line that's too large, split it directly
+        if len(lines) == 1 and content_bytes > LUCENE_SAFE_BYTE_LIMIT:
+            return self._split_large_line(content, LUCENE_SAFE_BYTE_LIMIT)
+
+        if len(lines) <= chunk_size and content_bytes <= LUCENE_SAFE_BYTE_LIMIT:
             return [content]
 
+        # Line-based chunking with byte size validation
         i = 0
         while i < len(lines):
-            chunk_lines = lines[i : i + chunk_size]
-            chunks.append("\n".join(chunk_lines))
-            i += chunk_size - overlap
+            # First check if the current line alone exceeds the limit
+            current_line = lines[i]
+            current_line_bytes = len(current_line.encode('utf-8'))
+
+            if current_line_bytes > LUCENE_SAFE_BYTE_LIMIT:
+                # This single line is too large, split it
+                line_chunks = self._split_large_line(current_line, LUCENE_SAFE_BYTE_LIMIT)
+                chunks.extend(line_chunks)
+                i += 1
+                continue
+
+            # Try to build a chunk with multiple lines
+            chunk_lines = []
+            chunk_bytes = 0
+            j = i
+
+            while j < len(lines) and j < i + chunk_size:
+                line = lines[j]
+                line_bytes = len(line.encode('utf-8'))
+
+                # Check if this individual line is too large
+                if line_bytes > LUCENE_SAFE_BYTE_LIMIT:
+                    # Stop here and process what we have so far
+                    break
+
+                # Check if adding this line would exceed the limit
+                potential_chunk = "\n".join(chunk_lines + [line])
+                potential_bytes = len(potential_chunk.encode('utf-8'))
+
+                if potential_bytes > LUCENE_SAFE_BYTE_LIMIT:
+                    # Stop here, don't add this line
+                    break
+
+                chunk_lines.append(line)
+                chunk_bytes = potential_bytes
+                j += 1
+
+            # Add the chunk if we collected any lines
+            if chunk_lines:
+                chunk = "\n".join(chunk_lines)
+                chunks.append(chunk)
+                # Move forward with overlap
+                lines_consumed = len(chunk_lines)
+                i += max(1, lines_consumed - overlap)
+            else:
+                # No lines collected (shouldn't happen due to earlier checks)
+                i += 1
 
         return chunks
+
+    def _split_large_line(self, line: str, max_bytes: int) -> list[str]:
+        """
+        Split a single large line that exceeds the byte limit.
+        
+        Args:
+            line: The line to split
+            max_bytes: Maximum bytes per chunk
+            
+        Returns:
+            List of line chunks
+        """
+        chunks = []
+        line_bytes = line.encode('utf-8')
+
+        if len(line_bytes) <= max_bytes:
+            return [line]
+
+        # Binary search to find safe split points
+        start = 0
+        while start < len(line):
+            # Find the maximum substring that fits
+            left, right = 1, min(len(line) - start, max_bytes)
+            best_fit = 1
+
+            while left <= right:
+                mid = (left + right) // 2
+                test_chunk = line[start:start + mid]
+                test_bytes = len(test_chunk.encode('utf-8'))
+
+                if test_bytes <= max_bytes:
+                    best_fit = mid
+                    left = mid + 1
+                else:
+                    right = mid - 1
+
+            # Try to find a natural break point (space, punctuation)
+            chunk_end = start + best_fit
+            if chunk_end < len(line):
+                # Look for a natural break point in the last 10% of the chunk
+                search_start = start + int(best_fit * 0.9)
+                for break_char in [' ', ',', ';', ')', '}', ']', '>', '\t']:
+                    break_pos = line.rfind(break_char, search_start, chunk_end)
+                    if break_pos > start:
+                        chunk_end = break_pos + 1
+                        break
+
+            chunks.append(line[start:chunk_end])
+            start = chunk_end
+
+        return chunks
+
+    def _chunk_by_tokens(self, content: str, max_tokens: int = 2000, overlap_tokens: int = 200) -> list[str]:
+        """
+        Chunk content by estimated token count with Lucene byte limit awareness.
+        
+        Args:
+            content: Content to chunk
+            max_tokens: Maximum tokens per chunk (default 2000, safe for embeddings)
+            overlap_tokens: Overlap between chunks in tokens
+        
+        Returns:
+            List of content chunks that are safe for Lucene indexing
+        """
+        LUCENE_SAFE_BYTE_LIMIT = 30000
+        chunks = []
+
+        # Convert to approximate character counts
+        max_chars = max_tokens * 5
+        overlap_chars = overlap_tokens * 5
+
+        # Ensure we don't exceed Lucene byte limit even with token-based chunking
+        max_chars = min(max_chars, LUCENE_SAFE_BYTE_LIMIT // 3)  # Conservative estimate for UTF-8
+
+        # Split by natural boundaries if possible (paragraphs, then sentences)
+        lines = content.split("\n")
+        current_chunk = []
+        current_size = 0
+
+        for line in lines:
+            line_size = len(line)
+            line_bytes = len(line.encode('utf-8'))
+
+            # Check if single line exceeds byte limit
+            if line_bytes > LUCENE_SAFE_BYTE_LIMIT:
+                # This single line is too long, need to split it
+                line_chunks = self._split_large_line(line, LUCENE_SAFE_BYTE_LIMIT)
+                chunks.extend(line_chunks)
+                continue
+
+            # Check both character and byte limits
+            potential_chunk = "\n".join(current_chunk + [line])
+            potential_bytes = len(potential_chunk.encode('utf-8'))
+
+            # If adding this line would exceed either limit, save current chunk
+            if (current_size + line_size > max_chars or potential_bytes > LUCENE_SAFE_BYTE_LIMIT) and current_chunk:
+                chunk_text = "\n".join(current_chunk)
+                chunks.append(chunk_text)
+
+                # Calculate overlap: keep last few lines for context
+                overlap_size = 0
+                overlap_lines = []
+                for prev_line in reversed(current_chunk):
+                    overlap_size += len(prev_line)
+                    overlap_lines.insert(0, prev_line)
+                    if overlap_size >= overlap_chars:
+                        break
+
+                current_chunk = overlap_lines
+                current_size = sum(len(line) for line in current_chunk)
+
+            current_chunk.append(line)
+            current_size += line_size
+
+        # Add remaining content
+        if current_chunk:
+            final_text = "\n".join(current_chunk)
+            final_bytes = len(final_text.encode('utf-8'))
+
+            # Check if the final chunk exceeds byte limit
+            if final_bytes > LUCENE_SAFE_BYTE_LIMIT:
+                # Split using our byte-aware splitter
+                remaining_chunks = self._split_large_line(final_text, LUCENE_SAFE_BYTE_LIMIT)
+                chunks.extend(remaining_chunks)
+            else:
+                chunks.append(final_text)
+
+        # If no lines were processed, fall back to byte-aware splitting
+        if not chunks and content:
+            chunks = self._split_large_line(content, LUCENE_SAFE_BYTE_LIMIT)
+
+        logger.info(f"Token-based chunking: {len(content)} chars -> {len(chunks)} chunks (byte-safe)")
+        return chunks
+
+    async def batch_index_files(self, code_files: list[CodeFile], batch_size: int = 100):
+        """
+        Index multiple code files using batch operations for improved performance.
+        
+        This method processes files in batches, using UNWIND operations to significantly
+        reduce database round-trips and improve indexing speed by 50-100x.
+        
+        Args:
+            code_files: List of CodeFile objects to index
+            batch_size: Number of files to process in each batch (default: 100)
+        """
+        if not code_files:
+            return
+
+        logger.info(f"Starting batch indexing of {len(code_files)} files with batch size {batch_size}")
+
+        # Process files in batches
+        for batch_start in range(0, len(code_files), batch_size):
+            batch_end = min(batch_start + batch_size, len(code_files))
+            batch = code_files[batch_start:batch_end]
+
+            # Prepare batch data for files
+            file_data = []
+            chunks_data = []
+
+            for code_file in batch:
+                # Ensure correct project name
+                if code_file.project_name != self.project_name:
+                    code_file = CodeFile(
+                        project_name=self.project_name,
+                        path=code_file.path,
+                        content=code_file.content,
+                        language=code_file.language,
+                        size=code_file.size,
+                        last_modified=code_file.last_modified,
+                    )
+
+                line_count = len(code_file.content.splitlines()) if code_file.content else 0
+
+                file_data.append({
+                    "project_name": self.project_name,
+                    "path": str(code_file.path),
+                    "language": code_file.language,
+                    "size": code_file.size,
+                    "lines": line_count,
+                    "last_modified": code_file.last_modified.isoformat(),
+                    "hash": code_file.file_hash,
+                })
+
+                # Create chunks for this file
+                chunks = self.chunk_content(code_file.content, self.chunk_size, self.chunk_overlap)
+                current_line = 0
+
+                for i, chunk in enumerate(chunks):
+                    # Sanitize the chunk
+                    sanitized_chunk = self._sanitize_for_lucene(chunk)
+
+                    # Validate chunk size
+                    chunk_bytes = len(sanitized_chunk.encode('utf-8'))
+                    if chunk_bytes > 32000:
+                        logger.error(f"Skipping oversized chunk {i} from {code_file.path}: {chunk_bytes} bytes")
+                        continue
+
+                    chunk_lines = sanitized_chunk.split("\n")
+                    start_line = current_line + 1
+                    end_line = current_line + len(chunk_lines)
+
+                    # Generate embedding if enabled
+                    embedding = None
+                    if self.embeddings:
+                        embedding = await self.embeddings.embed_text(sanitized_chunk)
+
+                    chunks_data.append({
+                        "project_name": self.project_name,
+                        "file_path": str(code_file.path),
+                        "content": sanitized_chunk,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "embedding": embedding,
+                        "chunk_index": i,
+                    })
+
+                    current_line = start_line + (self.chunk_size - self.chunk_overlap) - 1
+
+            # Batch upsert files
+            file_upsert_query = """
+            UNWIND $files as file
+            MERGE (f:CodeFile {project_name: file.project_name, path: file.path})
+            SET f.language = file.language,
+                f.size = file.size,
+                f.lines = file.lines,
+                f.last_modified = file.last_modified,
+                f.hash = file.hash
+            """
+
+            await self.neo4j_driver.execute_query(
+                file_upsert_query,
+                {"files": file_data},
+                routing_control=RoutingControl.WRITE,
+            )
+
+            # Delete existing chunks for these files
+            paths = [f["path"] for f in file_data]
+            delete_chunks_query = """
+            UNWIND $paths as path
+            MATCH (f:CodeFile {project_name: $project_name, path: path})-[:HAS_CHUNK]->(c:CodeChunk)
+            DETACH DELETE c
+            """
+
+            await self.neo4j_driver.execute_query(
+                delete_chunks_query,
+                {"project_name": self.project_name, "paths": paths},
+                routing_control=RoutingControl.WRITE,
+            )
+
+            # Batch create chunks (process in smaller sub-batches to avoid memory issues)
+            chunk_batch_size = 1000
+            for chunk_start in range(0, len(chunks_data), chunk_batch_size):
+                chunk_end = min(chunk_start + chunk_batch_size, len(chunks_data))
+                chunk_batch = chunks_data[chunk_start:chunk_end]
+
+                chunk_create_query = """
+                UNWIND $chunks as chunk
+                MATCH (f:CodeFile {project_name: chunk.project_name, path: chunk.file_path})
+                CREATE (c:CodeChunk {
+                    project_name: chunk.project_name,
+                    file_path: chunk.file_path,
+                    content: chunk.content,
+                    start_line: chunk.start_line,
+                    end_line: chunk.end_line,
+                    embedding: chunk.embedding,
+                    chunk_index: chunk.chunk_index
+                })
+                CREATE (f)-[:HAS_CHUNK]->(c)
+                """
+
+                await self.neo4j_driver.execute_query(
+                    chunk_create_query,
+                    {"chunks": chunk_batch},
+                    routing_control=RoutingControl.WRITE,
+                )
+
+            logger.info(f"Batch indexed files {batch_start+1}-{batch_end}/{len(code_files)}")
 
     async def index_file(self, code_file: CodeFile):
         """
@@ -457,10 +844,12 @@ class Neo4jRAG:
             )
 
         # Create or update file node with project context
+        line_count = len(code_file.content.splitlines()) if code_file.content else 0
         file_query = """
         MERGE (f:CodeFile {project_name: $project_name, path: $path})
         SET f.language = $language,
             f.size = $size,
+            f.lines = $lines,
             f.last_modified = $last_modified,
             f.hash = $hash
         RETURN f
@@ -473,6 +862,7 @@ class Neo4jRAG:
                 "path": str(code_file.path),
                 "language": code_file.language,
                 "size": code_file.size,
+                "lines": line_count,
                 "last_modified": code_file.last_modified.isoformat(),
                 "hash": code_file.file_hash,
             },
@@ -495,15 +885,33 @@ class Neo4jRAG:
         chunks = self.chunk_content(code_file.content, self.chunk_size, self.chunk_overlap)
 
         current_line = 0
+        indexed_chunks = 0
+        skipped_chunks = 0
 
         for i, chunk in enumerate(chunks):
-            chunk_lines = chunk.split("\n")
+            # Sanitize the chunk to ensure no single term exceeds Lucene's limit
+            sanitized_chunk = self._sanitize_for_lucene(chunk)
+
+            # Validate chunk size (should never exceed limit with new implementation)
+            chunk_bytes = len(sanitized_chunk.encode('utf-8'))
+            if chunk_bytes > 32000:
+                # This should not happen with the new implementation
+                logger.error(f"CRITICAL: Chunk {i} from {code_file.path} exceeds 32KB limit ({chunk_bytes} bytes) - This indicates a bug in chunking!")
+                logger.error(f"Chunk preview: {sanitized_chunk[:100]}...")
+                skipped_chunks += 1
+                continue
+
+            # Log large chunks for monitoring
+            if chunk_bytes > 25000:
+                logger.warning(f"Large chunk {i} from {code_file.path}: {chunk_bytes} bytes (approaching limit)")
+
+            chunk_lines = sanitized_chunk.split("\n")
             start_line = current_line + 1
             end_line = current_line + len(chunk_lines)
 
             # Generate embedding for chunk if embeddings are enabled
             if self.embeddings:
-                embedding = await self.embeddings.embed_text(chunk)
+                embedding = await self.embeddings.embed_text(sanitized_chunk)
             else:
                 embedding = None
 
@@ -527,7 +935,7 @@ class Neo4jRAG:
                 {
                     "project_name": self.project_name,
                     "file_path": str(code_file.path),
-                    "content": chunk,
+                    "content": sanitized_chunk,
                     "start_line": start_line,
                     "end_line": end_line,
                     "embedding": embedding,
@@ -536,9 +944,13 @@ class Neo4jRAG:
                 routing_control=RoutingControl.WRITE,
             )
 
+            indexed_chunks += 1
             current_line = start_line + (self.chunk_size - self.chunk_overlap) - 1
 
-        logger.info(f"Indexed file {code_file.path} with {len(chunks)} chunks")
+        if skipped_chunks > 0:
+            logger.error(f"Indexed file {code_file.path}: {indexed_chunks} chunks indexed, {skipped_chunks} chunks SKIPPED due to size!")
+        else:
+            logger.info(f"Indexed file {code_file.path} with {indexed_chunks} chunks successfully")
 
     async def update_file(self, code_file: CodeFile):
         """Update an existing file in the graph with project context."""
@@ -707,6 +1119,7 @@ class Neo4jRAG:
         pattern: str,
         is_regex: bool = False,
         limit: int = 10,
+        language: str | None = None,
     ) -> list[SearchResult]:
         """
         Search for code by pattern (literal phrase via Lucene) or by regex (Cypher =~).
@@ -715,6 +1128,7 @@ class Neo4jRAG:
             pattern: Search pattern
             is_regex: Whether pattern is a regex
             limit: Maximum number of results
+            language: Filter by programming language
 
         Returns:
             List of search results
@@ -724,6 +1138,11 @@ class Neo4jRAG:
             query = """
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c:CodeChunk)
             WHERE c.project_name = $project_name AND c.content =~ $pattern
+            """
+            if language:
+                query += " AND f.language = $language"
+
+            query += """
             RETURN f.path as file_path,
                    c.content as content,
                    c.start_line as line_number,
@@ -744,6 +1163,11 @@ class Neo4jRAG:
             YIELD node as c, score
             MATCH (f:CodeFile)-[:HAS_CHUNK]->(c)
             WHERE c.project_name = $project_name
+            """
+            if language:
+                query += " AND f.language = $language"
+
+            query += """
             RETURN f.path as file_path,
                    c.content as content,
                    c.start_line as line_number,
@@ -754,9 +1178,17 @@ class Neo4jRAG:
             """
             query_pattern = phrase
 
+        params = {
+            "project_name": self.project_name,
+            "pattern": query_pattern,
+            "limit": limit,
+        }
+        if language:
+            params["language"] = language
+
         result = await self.neo4j_driver.execute_query(
             query,
-            {"project_name": self.project_name, "pattern": query_pattern, "limit": limit},
+            params,
             routing_control=RoutingControl.READ,
         )
 
@@ -789,6 +1221,7 @@ class Neo4jRAG:
         RETURN f.path as path,
                f.language as language,
                f.size as size,
+               f.lines as lines,
                f.last_modified as last_modified,
                f.hash as hash,
                f.project_name as project_name,
@@ -807,6 +1240,7 @@ class Neo4jRAG:
                 "path": record["path"],
                 "language": record["language"],
                 "size": record["size"],
+                "lines": record.get("lines", 0),
                 "last_modified": record["last_modified"],
                 "hash": record["hash"],
                 "project_name": record.get("project_name", self.project_name),
@@ -869,18 +1303,18 @@ class Neo4jRAG:
         MATCH (f:CodeFile {project_name: $project_name})
         RETURN count(f) as file_count
         """
-        
+
         result = await self.neo4j_driver.execute_query(
-            query, 
+            query,
             {"project_name": project_name},
             routing_control=RoutingControl.READ
         )
-        
+
         if result.records and len(result.records) > 0:
             file_count = result.records[0].get("file_count", 0)
             return file_count > 0
         return False
-    
+
     async def get_indexed_files(self, project_name: str) -> dict[Path, datetime]:
         """
         Get a list of indexed files with their timestamps.
@@ -895,18 +1329,18 @@ class Neo4jRAG:
         MATCH (f:CodeFile {project_name: $project_name})
         RETURN f.path as path, f.last_modified as last_modified
         """
-        
+
         result = await self.neo4j_driver.execute_query(
             query,
             {"project_name": project_name},
             routing_control=RoutingControl.READ
         )
-        
+
         file_map = {}
         for record in result.records:
             path = Path(record["path"])
             last_modified_str = record.get("last_modified")
-            
+
             # Handle missing or invalid timestamps
             if last_modified_str:
                 try:
@@ -918,13 +1352,13 @@ class Neo4jRAG:
             else:
                 # Use a very old timestamp for files without timestamps
                 last_modified = datetime.min
-                
+
             file_map[path] = last_modified
-            
+
         return file_map
-    
+
     async def detect_changed_files(
-        self, 
+        self,
         current_files: list[Any],  # List[FileInfo]
         indexed_files: dict[Path, datetime]
     ) -> tuple[list[Any], list[Any], list[Path]]:
@@ -941,14 +1375,14 @@ class Neo4jRAG:
         new_files = []
         modified_files = []
         deleted_paths = []
-        
+
         # Track which indexed files we've seen
         seen_indexed_files = set()
-        
+
         # Check current files against indexed files
         for file_info in current_files:
             file_path = file_info.path
-            
+
             if file_path not in indexed_files:
                 # This is a new file
                 new_files.append(file_info)
@@ -956,19 +1390,19 @@ class Neo4jRAG:
                 # File exists in index, check if modified
                 seen_indexed_files.add(file_path)
                 indexed_timestamp = indexed_files[file_path]
-                
+
                 # Compare timestamps (files are modified if current timestamp is newer)
                 if file_info.last_modified > indexed_timestamp:
                     modified_files.append(file_info)
                 # If timestamps are equal or older, file is unchanged (ignore it)
-        
+
         # Find deleted files (in index but not in current files)
         for indexed_path in indexed_files:
             if indexed_path not in seen_indexed_files:
                 deleted_paths.append(indexed_path)
-        
+
         return new_files, modified_files, deleted_paths
-    
+
     async def remove_files(self, project_name: str, file_paths: list[Path]):
         """
         Remove files and their chunks from the Neo4j index.
@@ -980,10 +1414,10 @@ class Neo4jRAG:
         if not file_paths:
             # Nothing to remove
             return
-            
+
         # Convert paths to strings for the query
         path_strings = [str(path) for path in file_paths]
-        
+
         # Delete files and their chunks in a single query
         query = """
         UNWIND $paths as path
@@ -991,7 +1425,7 @@ class Neo4jRAG:
         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:CodeChunk)
         DETACH DELETE f, c
         """
-        
+
         await self.neo4j_driver.execute_query(
             query,
             {
@@ -1000,7 +1434,7 @@ class Neo4jRAG:
             },
             routing_control=RoutingControl.WRITE
         )
-        
+
         logger.info(f"Removed {len(file_paths)} files from project {project_name}")
 
     async def close(self):

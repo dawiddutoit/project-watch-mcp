@@ -1,5 +1,6 @@
 """Comprehensive tests for MCP server module covering all tools."""
 
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,21 +24,19 @@ def mock_repository_monitor():
     monitor.is_running = False
     monitor.monitoring_since = datetime.now()
     
-    # Create sample file info objects
-    sample_files = [
-        FileInfo(
-            path=Path("/test/repo/main.py"),
-            size=1024,
-            last_modified=datetime.now(),
-            language="python"
-        ),
-        FileInfo(
-            path=Path("/test/repo/utils.js"),
-            size=512,
-            last_modified=datetime.now(),
-            language="javascript"
-        )
-    ]
+    # Create sample file info objects with mocked readable paths
+    sample_files = []
+    for name, lang, size in [("main.py", "python", 1024), ("utils.js", "javascript", 512)]:
+        file_info = MagicMock(spec=FileInfo)
+        # Create a mock path that can be read
+        mock_path = MagicMock()
+        mock_path.read_text = MagicMock(return_value=f"// Sample {name} content\nconsole.log('test');")
+        mock_path.__str__ = MagicMock(return_value=f"/test/repo/{name}")
+        file_info.path = mock_path
+        file_info.size = size
+        file_info.last_modified = datetime.now()
+        file_info.language = lang
+        sample_files.append(file_info)
     
     monitor.scan_repository = AsyncMock(return_value=sample_files)
     monitor.start = AsyncMock()
@@ -95,15 +94,14 @@ def mock_neo4j_rag():
             "total_files": 42,
             "total_chunks": 256,
             "total_size": 1048576,
-            "total_lines": 5000,
             "languages": {
                 "python": {"files": 25, "size": 512000, "percentage": 48.8},
                 "javascript": {"files": 10, "size": 256000, "percentage": 24.4},
                 "typescript": {"files": 7, "size": 280576, "percentage": 26.8}
             },
             "largest_files": [
-                {"path": "src/main.py", "size": 10240, "lines": 300},
-                {"path": "src/utils.js", "size": 8192, "lines": 250}
+                {"path": "src/main.py", "size": 10240},
+                {"path": "src/utils.js", "size": 8192}
             ],
             "project_name": "test_project",
         }
@@ -179,36 +177,46 @@ class TestMCPServer:
 
     @pytest.mark.asyncio
     async def test_initialize_repository_success(self, mcp_server, mock_repository_monitor, mock_neo4j_rag):
-        """Test successful repository initialization."""
+        """Test successful repository initialization (now with background indexing)."""
         # Execute the tool
         tool = await mcp_server.get_tool("initialize_repository")
         result = await tool.fn()
         
-        # Verify the tool executed successfully
+        # Verify the tool executed successfully and returns immediately
         assert result is not None
-        assert "indexed" in result.structured_content
+        assert "status" in result.structured_content
         assert "total" in result.structured_content
-        assert result.structured_content["indexed"] == 2  # We have 2 sample files
-        assert result.structured_content["total"] == 2
+        assert result.structured_content["status"] == "indexing_started"
+        assert result.structured_content["total"] == 2  # We have 2 sample files
+        assert "background" in result.structured_content["message"].lower()
         
         # Verify mocks were called
         mock_repository_monitor.scan_repository.assert_called_once()
-        assert mock_neo4j_rag.index_file.call_count == 2
+        # index_file will be called in background, so we can't assert immediately
         mock_repository_monitor.start.assert_called_once()
+        
+        # Wait a bit for background task to complete
+        await asyncio.sleep(0.1)
+        # Now we can check that indexing happened
+        assert mock_neo4j_rag.index_file.call_count == 2
 
     @pytest.mark.asyncio
     async def test_initialize_repository_partial_failure(self, mcp_server, mock_repository_monitor, mock_neo4j_rag):
-        """Test repository initialization with some files failing to index."""
+        """Test repository initialization with some files failing to index (background)."""
         # Make indexing fail for second file
         mock_neo4j_rag.index_file.side_effect = [None, Exception("Index failed")]
         
         tool = await mcp_server.get_tool("initialize_repository")
         result = await tool.fn()
         
-        # Should still succeed but report skipped files
-        assert result.structured_content["indexed"] == 1
+        # Should still report that indexing started (failures happen in background)
+        assert result.structured_content["status"] == "indexing_started"
         assert result.structured_content["total"] == 2
-        assert len(result.structured_content["skipped"]) == 1
+        
+        # Wait for background task to process
+        await asyncio.sleep(0.1)
+        # Verify that index_file was called twice (once success, once failure)
+        assert mock_neo4j_rag.index_file.call_count == 2
 
     @pytest.mark.asyncio
     async def test_initialize_repository_total_failure(self, mcp_server, mock_repository_monitor):
@@ -281,6 +289,45 @@ class TestMCPServer:
         )
 
     @pytest.mark.asyncio
+    async def test_search_code_pattern_with_language(self, mcp_server, mock_neo4j_rag):
+        """Test pattern search with language filtering."""
+        tool = await mcp_server.get_tool("search_code")
+        result = await tool.fn(
+            query="class",
+            search_type="pattern",
+            is_regex=False,
+            language="python",
+            limit=5
+        )
+        
+        assert result is not None
+        mock_neo4j_rag.search_by_pattern.assert_called_once_with(
+            pattern="class",
+            is_regex=False,
+            limit=5,
+            language="python"
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_code_pattern_regex(self, mcp_server, mock_neo4j_rag):
+        """Test pattern search with regex."""
+        tool = await mcp_server.get_tool("search_code")
+        result = await tool.fn(
+            query="TODO|FIXME|HACK",
+            search_type="pattern",
+            is_regex=True,
+            limit=10
+        )
+        
+        assert result is not None
+        mock_neo4j_rag.search_by_pattern.assert_called_once_with(
+            pattern="TODO|FIXME|HACK",
+            is_regex=True,
+            limit=10,
+            language=None
+        )
+
+    @pytest.mark.asyncio
     async def test_search_code_limit_validation(self, mcp_server):
         """Test that search limit is capped at 100."""
         tool = await mcp_server.get_tool("search_code")
@@ -291,6 +338,60 @@ class TestMCPServer:
         
         # Should be capped at 100
         assert result.structured_content["limit_applied"] <= 100
+
+    @pytest.mark.asyncio
+    async def test_search_code_content_truncation(self, mcp_server, mock_neo4j_rag):
+        """Test that search results show proper content truncation."""
+        # Create a long content string (600 chars)
+        long_content = "x" * 600
+        
+        from project_watch_mcp.neo4j_rag import SearchResult
+        from pathlib import Path
+        
+        mock_neo4j_rag.search_semantic.return_value = [
+            SearchResult(
+                project_name="test_project",
+                file_path=Path("test.py"),
+                content=long_content,
+                line_number=1,
+                similarity=0.95
+            )
+        ]
+        
+        tool = await mcp_server.get_tool("search_code")
+        result = await tool.fn(query="test")
+        
+        # Structured content should have truncated at 500 chars
+        assert len(result.structured_content["results"][0]["content"]) == 500
+        assert result.structured_content["results"][0]["content"].endswith("...")
+        
+        # Text display should show up to 200 chars
+        assert "xxx..." in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_search_code_no_truncation_for_short_content(self, mcp_server, mock_neo4j_rag):
+        """Test that short content is not truncated."""
+        short_content = "This is a short piece of code"
+        
+        from project_watch_mcp.neo4j_rag import SearchResult
+        from pathlib import Path
+        
+        mock_neo4j_rag.search_semantic.return_value = [
+            SearchResult(
+                project_name="test_project",
+                file_path=Path("test.py"),
+                content=short_content,
+                line_number=1,
+                similarity=0.95
+            )
+        ]
+        
+        tool = await mcp_server.get_tool("search_code")
+        result = await tool.fn(query="test")
+        
+        # Short content should not be truncated
+        assert result.structured_content["results"][0]["content"] == short_content
+        assert "..." not in result.structured_content["results"][0]["content"]
 
     @pytest.mark.asyncio
     async def test_get_repository_stats(self, mcp_server, mock_neo4j_rag):
@@ -335,6 +436,48 @@ class TestMCPServer:
         result = await tool.fn(file_path="nonexistent.py")
         assert result.structured_content["error"] == "File not found in index"
         assert "not found in index" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_get_file_info_indexed_flag_with_chunks(self, mcp_server, mock_neo4j_rag):
+        """Test that indexed flag is True when chunk_count > 0."""
+        # Return dict format from get_file_metadata (not CodeFile object)
+        mock_neo4j_rag.get_file_metadata.return_value = {
+            "path": "src/indexed_file.py",
+            "language": "python",
+            "size": 2048,
+            "last_modified": "2024-01-15T10:30:00Z",
+            "hash": "abc123",
+            "chunk_count": 8  # File has chunks
+        }
+        
+        tool = await mcp_server.get_tool("get_file_info")
+        result = await tool.fn(file_path="src/indexed_file.py")
+        
+        assert result is not None
+        info = result.structured_content
+        assert info["chunk_count"] == 8
+        assert info["indexed"] is True  # Should be True when chunks > 0
+
+    @pytest.mark.asyncio
+    async def test_get_file_info_indexed_flag_without_chunks(self, mcp_server, mock_neo4j_rag):
+        """Test that indexed flag is False when chunk_count = 0."""
+        # Return dict format from get_file_metadata
+        mock_neo4j_rag.get_file_metadata.return_value = {
+            "path": "src/empty_file.py",
+            "language": "python",
+            "size": 0,
+            "last_modified": "2024-01-15T10:30:00Z",
+            "hash": "empty",
+            "chunk_count": 0  # File has no chunks
+        }
+        
+        tool = await mcp_server.get_tool("get_file_info")
+        result = await tool.fn(file_path="src/empty_file.py")
+        
+        assert result is not None
+        info = result.structured_content
+        assert info["chunk_count"] == 0
+        assert info["indexed"] is False  # Should be False when chunks = 0
 
     @pytest.mark.asyncio
     async def test_refresh_file_success(self, mcp_server, mock_repository_monitor, mock_neo4j_rag):

@@ -35,6 +35,7 @@ dependencies = [
     "tree-sitter-python>=0.23.6",
     "voyageai>=0.3.4",
     "watchfiles>=0.24.0",
+    "xxhash>=3.4.0",
     # Vector search dependencies
     "langchain>=0.3.0",
     "langchain-neo4j>=0.2.0",

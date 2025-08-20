@@ -84,37 +84,37 @@ def create_mcp_server(
 
         Scans the repository for all matching files (respecting .gitignore patterns),
         indexes them in Neo4j for semantic search, and starts real-time monitoring
-        for file changes.
+        for file changes. Indexing happens in the background to avoid blocking.
 
         Examples:
             >>> # First-time initialization
             >>> await initialize_repository()
             {
-                "indexed": 42,
+                "status": "indexing_started",
                 "total": 45,
-                "message": "Repository initialized. Indexed 42/45 files."
+                "message": "Background indexing started for 45 files."
             }
 
             >>> # Re-initialization (updates existing index)
             >>> await initialize_repository()
             {
-                "indexed": 3,
+                "status": "indexing_started",
                 "total": 45,
-                "message": "Repository re-indexed. Updated 3 changed files."
+                "message": "Background re-indexing started. Updating changed files."
             }
 
         Returns:
             ToolResult with:
-            - indexed: Number of successfully indexed files
+            - status: "indexing_started" or "no_files"
             - total: Total number of files found
-            - skipped: List of files that failed to index (if any)
-            - monitoring: True if monitoring started successfully
+            - message: Status message
 
         Raises:
-            ToolError: When repository scanning or indexing fails
+            ToolError: When repository scanning fails
 
         Notes:
             - Safe to run multiple times (idempotent)
+            - Indexing happens in background - use indexing_status tool to check progress
             - Automatically detects and updates only changed files on re-run
             - Respects .gitignore patterns in repository
             - Supports: .py, .js, .ts, .jsx, .tsx, .java, .cpp, .c, .h, .hpp,
@@ -122,56 +122,81 @@ def create_mcp_server(
               .sh, .yaml, .yml, .toml, .json, .xml, .html, .css, .scss, .md, .txt
         """
         try:
-            # Scan repository
+            import asyncio
+
+            # Scan repository to get file list
             files = await repository_monitor.scan_repository()
             total = len(files)
 
-            # Index files
-            indexed = 0
-            skipped = []
-            for file_info in files:
+            if total == 0:
+                return ToolResult(
+                    content=[TextContent(type="text", text="No files found to index.")],
+                    structured_content={
+                        "status": "no_files",
+                        "total": 0,
+                        "message": "No files found matching patterns.",
+                    },
+                )
+
+            # Background indexing function
+            async def background_index():
+                """Perform indexing in the background using batch operations."""
+                indexed = 0
+                skipped = []
+                code_files = []
+
                 try:
-                    # Read file content and create CodeFile object
-                    try:
-                        content = file_info.path.read_text(encoding='utf-8')
-                    except Exception as e:
-                        logger.debug(f"Could not read file {file_info.path}: {e}")
-                        skipped.append(str(file_info.path))
-                        continue
+                    # Collect all files into CodeFile objects first
+                    for file_info in files:
+                        try:
+                            # Read file content and create CodeFile object
+                            try:
+                                content = file_info.path.read_text(encoding='utf-8')
+                            except Exception as e:
+                                logger.debug(f"Could not read file {file_info.path}: {e}")
+                                skipped.append(str(file_info.path))
+                                continue
 
-                    # Create CodeFile from FileInfo
-                    code_file = CodeFile(
-                        project_name=project_name,
-                        path=file_info.path,
-                        content=content,
-                        language=file_info.language or "text",
-                        size=file_info.size,
-                        last_modified=file_info.last_modified,
-                    )
+                            # Create CodeFile from FileInfo
+                            code_file = CodeFile(
+                                project_name=project_name,
+                                path=file_info.path,
+                                content=content,
+                                language=file_info.language or "text",
+                                size=file_info.size,
+                                last_modified=file_info.last_modified,
+                            )
+                            code_files.append(code_file)
+                        except Exception as e:
+                            logger.error(f"Failed to prepare {file_info.path} for indexing: {e}")
+                            skipped.append(str(file_info.path))
 
-                    await neo4j_rag.index_file(code_file)
-                    indexed += 1
+                    # Use batch indexing for better performance
+                    if code_files:
+                        await neo4j_rag.batch_index_files(code_files)
+                        indexed = len(code_files)
+
+                    logger.info(f"Background indexing complete: indexed {indexed}/{total} files")
+                    if skipped:
+                        logger.info(f"Skipped {len(skipped)} files during indexing")
                 except Exception as e:
-                    logger.error(f"Failed to index {file_info.path}: {e}")
-                    skipped.append(str(file_info.path))
+                    logger.error(f"Background indexing failed: {e}")
+
+            # Start indexing in background
+            indexing_task = asyncio.create_task(background_index())
+            indexing_task.set_name("background-indexing")
 
             # Start monitoring if not already running
             if not repository_monitor.is_running:
                 await repository_monitor.start()
 
-            message = f"Repository initialized. Indexed {indexed}/{total} files."
-            if skipped:
-                message += f" Skipped: {', '.join(skipped[:5])}"
-                if len(skipped) > 5:
-                    message += f" and {len(skipped) - 5} more"
+            message = f"Background indexing started for {total} files. Use indexing_status tool to check progress."
 
             return ToolResult(
                 content=[TextContent(type="text", text=message)],
                 structured_content={
-                    "indexed": indexed,
+                    "status": "indexing_started",
                     "total": total,
-                    "skipped": skipped,
-                    "monitoring": repository_monitor.is_running,
                     "message": message,
                 },
             )
@@ -320,7 +345,11 @@ def create_mcp_server(
             result_text = f"Found {len(formatted_results)} results for '{query}'\n\n"
             for i, res in enumerate(formatted_results[:10], 1):
                 result_text += f"{i}. {res['file']}:{res['line']} (similarity: {res['similarity']})\n"
-                result_text += f"   {res['content'][:100]}...\n\n"
+                # Show more content in text display (up to 200 chars for better visibility)
+                content_preview = res['content'][:200] if len(res['content']) > 200 else res['content']
+                if len(res['content']) > 200:
+                    content_preview += "..."
+                result_text += f"   {content_preview}\n\n"
 
             return ToolResult(
                 content=[TextContent(type="text", text=result_text)],
@@ -358,7 +387,6 @@ def create_mcp_server(
                 "total_files": 156,
                 "total_chunks": 1243,
                 "total_size": 2456789,
-                "total_lines": 45678,
                 "languages": {
                     "python": {"files": 89, "size": 1234567, "percentage": 57.05},
                     "javascript": {"files": 45, "size": 890123, "percentage": 28.85},
@@ -381,7 +409,6 @@ def create_mcp_server(
             - total_files: Number of files in index
             - total_chunks: Number of code chunks (for semantic search)
             - total_size: Total size in bytes
-            - total_lines: Total lines of code
             - languages: Breakdown by programming language with:
                 - files: Number of files
                 - size: Total size in bytes
@@ -405,7 +432,6 @@ def create_mcp_server(
 - Total Files: {stats.get('total_files', 0)}
 - Total Chunks: {stats.get('total_chunks', 0)}
 - Total Size: {stats.get('total_size', 0):,} bytes
-- Total Lines: {stats.get('total_lines', 0):,}
 
 Languages:
 """
@@ -541,8 +567,8 @@ Languages:
                         "size": file_info.size,
                         "lines": getattr(file_info, 'lines', len(file_info.content.splitlines()) if file_info.content else 0),
                         "last_modified": str(file_info.last_modified) if file_info.last_modified else "unknown",
-                        "indexed": True,
-                        "chunk_count": 0,
+                        "indexed": True,  # If we have a CodeFile object, it's indexed
+                        "chunk_count": getattr(file_info, 'chunk_count', 0),
                         "imports": getattr(file_info, 'imports', []),
                         "classes": getattr(file_info, 'classes', []),
                         "functions": getattr(file_info, 'functions', [])
@@ -551,8 +577,10 @@ Languages:
                     # Generic object, convert to dict
                     file_dict = file_info.__dict__
             else:
-                # It's already a dictionary
+                # It's already a dictionary (from get_file_metadata)
                 file_dict = file_info
+                # Set indexed flag based on chunk_count
+                file_dict["indexed"] = file_dict.get("chunk_count", 0) > 0
 
             # Format result
             result_text = f"""File Information:
@@ -1192,7 +1220,7 @@ Languages:
                     if change_path and hasattr(change_path, 'relative_to'):
                         try:
                             change_path = str(change_path.relative_to(repository_monitor.repo_path))
-                        except:
+                        except Exception:
                             change_path = str(change_path)
                     else:
                         change_path = str(change_path)
@@ -1257,6 +1285,131 @@ Languages:
             logger.error(f"Failed to get monitoring status: {e}")
             raise ToolError(f"Failed to get monitoring status: {e}")
 
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Indexing Status",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
+    async def indexing_status() -> ToolResult:
+        """
+        Get the current status of background indexing.
+
+        Provides information about whether indexing is in progress, completed, or failed.
+        Useful for checking if the initial repository indexing is still running in the background.
+
+        Examples:
+            >>> await indexing_status()
+            {
+                "status": "in_progress",
+                "message": "Background indexing in progress...",
+                "tasks": [
+                    {
+                        "name": "background-indexing",
+                        "state": "running",
+                        "created_at": "2024-01-15T10:00:00Z"
+                    }
+                ],
+                "indexed_files": 42,
+                "total_estimate": 100
+            }
+
+            >>> # After completion
+            >>> await indexing_status()
+            {
+                "status": "completed",
+                "message": "Background indexing completed successfully",
+                "indexed_files": 100,
+                "duration_seconds": 15.3
+            }
+
+        Returns:
+            ToolResult with indexing status:
+            - status: "idle", "in_progress", "completed", or "failed"
+            - message: Human-readable status message
+            - tasks: List of background indexing tasks (if any)
+            - indexed_files: Number of files indexed so far
+            - total_estimate: Estimated total files (if available)
+            - duration_seconds: Time taken for indexing (if completed)
+
+        Notes:
+            - Initial indexing happens automatically on server startup
+            - Use initialize_repository tool to manually trigger re-indexing
+            - Queries work on partial index while indexing is in progress
+        """
+        try:
+            import asyncio
+
+            # Get all background tasks
+            all_tasks = asyncio.all_tasks()
+            indexing_tasks = [
+                task for task in all_tasks
+                if task.get_name() == "background-indexing"
+            ]
+
+            status_info = {
+                "status": "idle",
+                "message": "No indexing in progress",
+                "tasks": [],
+            }
+
+            if indexing_tasks:
+                active_tasks = [task for task in indexing_tasks if not task.done()]
+                if active_tasks:
+                    status_info["status"] = "in_progress"
+                    status_info["message"] = "Background indexing in progress..."
+                    status_info["tasks"] = [
+                        {
+                            "name": task.get_name(),
+                            "state": "running" if not task.done() else "completed",
+                        }
+                        for task in active_tasks
+                    ]
+                else:
+                    # Check if any tasks failed
+                    failed_tasks = [
+                        task for task in indexing_tasks
+                        if task.done() and task.exception() is not None
+                    ]
+                    if failed_tasks:
+                        status_info["status"] = "failed"
+                        status_info["message"] = "Background indexing failed"
+                        try:
+                            exc = failed_tasks[0].exception()
+                            if exc:
+                                status_info["error"] = str(exc)
+                        except Exception:
+                            pass
+                    else:
+                        status_info["status"] = "completed"
+                        status_info["message"] = "Background indexing completed successfully"
+
+            # Try to get stats from Neo4j about indexed files
+            try:
+                stats = await neo4j_rag.get_repository_stats()
+                status_info["indexed_files"] = stats.get("total_files", 0)
+            except Exception:
+                pass
+
+            result_text = f"Indexing Status: {status_info['status']}\n"
+            result_text += f"{status_info['message']}\n"
+            if status_info.get("tasks"):
+                result_text += f"Active tasks: {len(status_info['tasks'])}\n"
+            if status_info.get("indexed_files"):
+                result_text += f"Indexed files: {status_info['indexed_files']}\n"
+
+            return ToolResult(
+                content=[TextContent(type="text", text=result_text)],
+                structured_content=status_info
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to get indexing status: {e}")
+            raise ToolError(f"Failed to get indexing status: {e}") from e
+
     # Log registered tools
     logger.info("MCP Server tools registered:")
     logger.info("  • initialize_repository - Initialize and index repository")
@@ -1267,6 +1420,7 @@ Languages:
     logger.info("  • delete_file - Remove a file from the index")
     logger.info("  • analyze_complexity - Analyze code complexity")
     logger.info("  • monitoring_status - Get repository monitoring status")
+    logger.info("  • indexing_status - Get background indexing status")
     logger.info(f"✓ MCP server ready for project: {project_name}")
 
     return mcp

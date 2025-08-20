@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Literal, List, Union
+from typing import Literal
 
 import numpy as np
 import voyageai
@@ -44,8 +44,7 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
         self.api_key = api_key or os.getenv("VOYAGE_API_KEY")
         if not self.api_key:
             raise ValueError(
-                "Voyage API key not found. "
-                "Set VOYAGE_API_KEY environment variable or pass api_key."
+                "Voyage API key not found. Set VOYAGE_API_KEY environment variable or pass api_key."
             )
 
         # Initialize Voyage client
@@ -74,12 +73,12 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
         return text
 
     async def embed_text(
-        self, 
-        text: str, 
+        self,
+        text: str,
         input_type: Literal["document", "query"] = "document",
         native_format: bool = False,
-        validate_dimensions: bool = False
-    ) -> Union[list[float], np.ndarray]:
+        validate_dimensions: bool = False,
+    ) -> list[float] | np.ndarray:
         """
         Generate embeddings for given text using Voyage AI API.
 
@@ -92,6 +91,19 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
         Returns:
             Embedding vector as a list of floats or numpy array
         """
+        # Check for empty or whitespace-only text
+        if not text or not text.strip():
+            logger.info(
+                f"Empty or whitespace-only text detected. Returning zero vector of dimension {self.dimension}"
+            )
+            zero_vector = [0.0] * self.dimension
+
+            # Return native format if requested
+            if native_format:
+                return np.zeros(self.dimension, dtype=np.float32)
+
+            return zero_vector
+
         # Truncate text if needed
         text = self._truncate_text(text)
 
@@ -103,23 +115,24 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
 
             # Extract the first embedding (for single text input)
             embedding = response.embeddings[0]
-            
+
             # Validate dimensions if requested
             if validate_dimensions and not self.validate_vector_dimensions(embedding):
                 raise ValueError(
-                    f"Embedding dimension mismatch: expected {self.dimension}, "
-                    f"got {len(embedding)}"
+                    f"Embedding dimension mismatch: expected {self.dimension}, got {len(embedding)}"
                 )
-            
+
             # Return native format if requested
             if native_format:
                 try:
                     neo4j_vector = self.to_neo4j_vector(embedding)
                     return self.normalize_vector(neo4j_vector)
                 except Exception as e:
-                    logger.warning(f"Failed to convert to native format: {e}. Returning list format.")
+                    logger.warning(
+                        f"Failed to convert to native format: {e}. Returning list format."
+                    )
                     return embedding
-            
+
             return embedding
 
         except Exception as e:
@@ -127,12 +140,12 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
             raise
 
     async def embed_batch(
-        self, 
-        texts: list[str], 
+        self,
+        texts: list[str],
         input_type: Literal["document", "query"] = "document",
         native_format: bool = False,
-        validate_dimensions: bool = False
-    ) -> List[Union[List[float], np.ndarray]]:
+        validate_dimensions: bool = False,
+    ) -> list[list[float] | np.ndarray]:
         """
         Generate embeddings for multiple texts in batch.
 
@@ -145,17 +158,41 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
         Returns:
             List of embedding vectors
         """
-        # Truncate texts if needed
-        truncated_texts = [self._truncate_text(text) for text in texts]
+        # Keep track of which texts are empty and their original positions
+        non_empty_indices = []
+        non_empty_texts = []
+
+        for i, text in enumerate(texts):
+            # Check if text is not empty and not just whitespace
+            if text and text.strip():
+                non_empty_indices.append(i)
+                non_empty_texts.append(self._truncate_text(text))
+
+        # Handle case where all texts are empty
+        if not non_empty_texts:
+            logger.info(
+                f"All {len(texts)} texts are empty or whitespace-only. Returning zero vectors."
+            )
+            if native_format:
+                return [np.zeros(self.dimension, dtype=np.float32) for _ in texts]
+            else:
+                return [[0.0] * self.dimension for _ in texts]
+
+        # Log if some texts were empty
+        if len(non_empty_texts) < len(texts):
+            empty_count = len(texts) - len(non_empty_texts)
+            logger.info(
+                f"Found {empty_count} empty/whitespace-only texts out of {len(texts)}. Will return zero vectors for empty texts."
+            )
 
         try:
-            # Use Voyage embeddings API for batch
+            # Use Voyage embeddings API for batch with only non-empty texts
             response = await self.client.embed(
-                texts=truncated_texts, model=self.model, input_type=input_type
+                texts=non_empty_texts, model=self.model, input_type=input_type
             )
 
             embeddings = response.embeddings
-            
+
             # Validate dimensions if requested
             if validate_dimensions:
                 for i, embedding in enumerate(embeddings):
@@ -164,32 +201,49 @@ class VoyageEmbeddingsProvider(EmbeddingsProvider):
                             f"Embedding dimension mismatch at index {i}: "
                             f"expected {self.dimension}, got {len(embedding)}"
                         )
-            
-            # Convert to native format if requested
-            if native_format:
-                native_embeddings = []
-                for embedding in embeddings:
-                    try:
-                        neo4j_vector = self.to_neo4j_vector(embedding)
-                        native_embeddings.append(self.normalize_vector(neo4j_vector))
-                    except Exception as e:
-                        logger.warning(f"Failed to convert to native format: {e}. Using list format.")
-                        native_embeddings.append(embedding)
-                return native_embeddings
-            
-            return embeddings
+
+            # Reassemble results with zero vectors for empty texts
+            result: list[list[float] | np.ndarray] = []
+            embedding_idx = 0
+
+            for i in range(len(texts)):
+                if i in non_empty_indices:
+                    # This text had content, use the generated embedding
+                    embedding = embeddings[embedding_idx]
+                    embedding_idx += 1
+
+                    # Convert to native format if requested
+                    if native_format:
+                        try:
+                            neo4j_vector = self.to_neo4j_vector(embedding)
+                            result.append(self.normalize_vector(neo4j_vector))
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to convert to native format: {e}. Using list format."
+                            )
+                            result.append(embedding)
+                    else:
+                        result.append(embedding)
+                else:
+                    # This text was empty, use zero vector
+                    if native_format:
+                        result.append(np.zeros(self.dimension, dtype=np.float32))
+                    else:
+                        result.append([0.0] * self.dimension)
+
+            return result
 
         except Exception as e:
             logger.error(f"Voyage batch embedding generation failed: {e}")
             raise
-    
+
     async def embed(self, text: str) -> list[float]:
         """
         Legacy method for backward compatibility.
-        
+
         Args:
             text: Input text to embed
-            
+
         Returns:
             Embedding vector as a list of floats
         """
