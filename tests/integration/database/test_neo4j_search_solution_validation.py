@@ -151,9 +151,9 @@ class TestCompleteSearchSolution:
         mock_embeddings.embed_text = AsyncMock(return_value=[0.1] * 1536)
         
         rag = Neo4jRAG(
-            driver=mock_driver,
+            neo4j_driver=mock_driver,
             project_name="test",
-            embeddings_provider=mock_embeddings
+            embeddings=mock_embeddings
         )
         
         # Test all semantic queries

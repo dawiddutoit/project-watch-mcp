@@ -192,19 +192,22 @@ class TestMCPServer:
         
         # Verify mocks were called
         mock_repository_monitor.scan_repository.assert_called_once()
-        # index_file will be called in background, so we can't assert immediately
+        # batch_index_files will be called in background, so we can't assert immediately
         mock_repository_monitor.start.assert_called_once()
         
         # Wait a bit for background task to complete
         await asyncio.sleep(0.1)
-        # Now we can check that indexing happened
-        assert mock_neo4j_rag.index_file.call_count == 2
+        # Now we can check that batch indexing happened
+        assert mock_neo4j_rag.batch_index_files.call_count == 1
+        # Should have indexed both files in one batch
+        batch_call = mock_neo4j_rag.batch_index_files.call_args[0][0]
+        assert len(batch_call) == 2
 
     @pytest.mark.asyncio
     async def test_initialize_repository_partial_failure(self, mcp_server, mock_repository_monitor, mock_neo4j_rag):
         """Test repository initialization with some files failing to index (background)."""
-        # Make indexing fail for second file
-        mock_neo4j_rag.index_file.side_effect = [None, Exception("Index failed")]
+        # Make batch indexing fail
+        mock_neo4j_rag.batch_index_files.side_effect = Exception("Batch index failed")
         
         tool = await mcp_server.get_tool("initialize_repository")
         result = await tool.fn()
@@ -215,8 +218,8 @@ class TestMCPServer:
         
         # Wait for background task to process
         await asyncio.sleep(0.1)
-        # Verify that index_file was called twice (once success, once failure)
-        assert mock_neo4j_rag.index_file.call_count == 2
+        # Verify that batch_index_files was attempted
+        assert mock_neo4j_rag.batch_index_files.call_count == 1
 
     @pytest.mark.asyncio
     async def test_initialize_repository_total_failure(self, mcp_server, mock_repository_monitor):
@@ -530,21 +533,8 @@ class TestMCPServer:
 
     @pytest.mark.asyncio
     @patch('project_watch_mcp.server.RADON_AVAILABLE', True)
-    @patch('project_watch_mcp.server.cc_visit')
-    @patch('project_watch_mcp.server.mi_visit')
-    async def test_analyze_complexity_python(self, mock_mi, mock_cc, mcp_server):
+    async def test_analyze_complexity_python(self, mcp_server):
         """Test analyzing Python file complexity."""
-        # Mock radon responses
-        mock_cc.return_value = [
-            MagicMock(
-                name="test_function",
-                complexity=5,
-                lineno=10,
-                classname=None
-            )
-        ]
-        mock_mi.return_value = 75.5
-        
         # Create a temporary Python file
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:

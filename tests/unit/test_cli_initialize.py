@@ -386,18 +386,20 @@ class TestEndToEndIntegration:
             def create_mock(*args, **kwargs):
                 callback = kwargs.get('progress_callback')
                 
-                async def mock_initialize():
+                async def mock_initialize(progress_callback=None, persistent_monitoring=False):
+                    # Use the callback from kwargs if not passed as parameter
+                    progress_cb = progress_callback or callback
                     # Simulate progress updates
-                    if callback:
-                        callback(0, "Starting initialization...")
+                    if progress_cb:
+                        progress_cb(0, "Starting initialization...")
                         progress_updates.append((0, "Starting initialization..."))
-                        callback(25, "Scanning repository...")
+                        progress_cb(25, "Scanning repository...")
                         progress_updates.append((25, "Scanning repository..."))
-                        callback(50, "Indexing files...")
+                        progress_cb(50, "Indexing files...")
                         progress_updates.append((50, "Indexing files..."))
-                        callback(75, "Creating embeddings...")
+                        progress_cb(75, "Creating embeddings...")
                         progress_updates.append((75, "Creating embeddings..."))
-                        callback(100, "Complete!")
+                        progress_cb(100, "Complete!")
                         progress_updates.append((100, "Complete!"))
                     
                     return InitializationResult(indexed=10, total=10, monitoring=True)

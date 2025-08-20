@@ -2,7 +2,7 @@
 
 This guide provides comprehensive instructions for testing the Project Watch MCP server tools. Use this to verify all features are working correctly and to provide feedback on the tool's functionality.
 
-## <¯ Quick Start Testing Commands
+## <ï¿½ Quick Start Testing Commands
 
 Copy and paste these exact commands to test the MCP tools:
 
@@ -18,9 +18,15 @@ Use mcp__project-watch-mcp__search_code with query="test files" and search_type=
 
 # Get repository statistics
 Use mcp__project-watch-mcp__get_repository_stats
+
+# Search for test files using file classification
+Use mcp__project-watch-mcp__search_code with query="test" and file_category="test"
+
+# List all configuration files
+Use mcp__project-watch-mcp__list_files_by_category with category="config"
 ```
 
-## =Ë Testing Prerequisites
+## =ï¿½ Testing Prerequisites
 
 ### 1. Verify Neo4j is Running
 
@@ -56,7 +62,7 @@ Use mcp__project-watch-mcp__initialize_repository
 # If using mock provider, should work immediately
 ```
 
-## >ê Systematic Test Scenarios
+## >ï¿½ Systematic Test Scenarios
 
 ### Test 1: Repository Initialization
 
@@ -227,7 +233,50 @@ Use mcp__project-watch-mcp__analyze_complexity with file_path="README.md"
 # Expected: Error or message that file type not supported
 ```
 
-### Test 7: Monitoring Status
+### Test 7: File Classification Features
+
+```bash
+# Test 7.1: List files by category
+Use mcp__project-watch-mcp__list_files_by_category with category="test"
+
+# Expected output:
+[
+  {
+    "path": "tests/test_example.py",
+    "language": "python",
+    "size": 1234,
+    "lines": 50,
+    "category": "test",
+    "is_test": true,
+    "is_config": false,
+    "is_documentation": false,
+    "is_resource": false,
+    "namespace": "tests.test_example"
+  }
+]
+
+# Test 7.2: Search within specific file types
+Use mcp__project-watch-mcp__search_code with query="function" and is_test=true
+
+# Expected: Only results from test files
+
+# Test 7.3: List configuration files
+Use mcp__project-watch-mcp__list_files_by_category with category="config"
+
+# Expected: Lists config.yaml, settings.json, .env files, etc.
+
+# Test 7.4: Search excluding test files
+Use mcp__project-watch-mcp__search_code with query="main" and is_test=false
+
+# Expected: Results from source files only, no test files
+
+# Test 7.5: List documentation files
+Use mcp__project-watch-mcp__list_files_by_category with category="documentation"
+
+# Expected: README.md, CHANGELOG.md, docs/*.md files
+```
+
+### Test 8: Monitoring Status
 
 ```bash
 # Check monitoring and recent changes
@@ -255,7 +304,7 @@ Use mcp__project-watch-mcp__monitoring_status
 }
 ```
 
-## =€ Performance Testing
+## =ï¿½ Performance Testing
 
 ### Large Repository Test
 
@@ -407,7 +456,7 @@ Use mcp__project-watch-mcp__get_repository_stats
 # Very large repositories (>10k files) may be slower
 ```
 
-## =Ý Reporting Test Results
+## =ï¿½ Reporting Test Results
 
 When reporting test results, include:
 
@@ -428,7 +477,7 @@ When reporting test results, include:
    - Full error output
    - Expected vs actual results
 
-## <¯ Quick Test Suite
+## <ï¿½ Quick Test Suite
 
 Run these commands in order for a complete test:
 

@@ -278,6 +278,7 @@ class Neo4jRAG:
         embedding_config: EmbeddingConfig | None = None,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
+        enable_file_classification: bool = True,
     ):
         """
         Initialize the Neo4j RAG system.
@@ -311,6 +312,7 @@ class Neo4jRAG:
 
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.enable_file_classification = enable_file_classification
 
     def _create_provider_from_config(self, config: EmbeddingConfig) -> EmbeddingsProvider:
         """
@@ -375,6 +377,41 @@ class Neo4jRAG:
             }
             """,
         ]
+
+        # Add classification indexes if enabled
+        if self.enable_file_classification:
+            queries.extend([
+                # Index for file categories
+                """
+                CREATE INDEX project_file_category_index IF NOT EXISTS
+                FOR (f:CodeFile) ON (f.project_name, f.file_category)
+                """,
+                # Index for test files
+                """
+                CREATE INDEX project_is_test_index IF NOT EXISTS
+                FOR (f:CodeFile) ON (f.project_name, f.is_test)
+                """,
+                # Index for config files
+                """
+                CREATE INDEX project_is_config_index IF NOT EXISTS
+                FOR (f:CodeFile) ON (f.project_name, f.is_config)
+                """,
+                # Index for documentation files
+                """
+                CREATE INDEX project_is_documentation_index IF NOT EXISTS
+                FOR (f:CodeFile) ON (f.project_name, f.is_documentation)
+                """,
+                # Index for resource files
+                """
+                CREATE INDEX project_is_resource_index IF NOT EXISTS
+                FOR (f:CodeFile) ON (f.project_name, f.is_resource)
+                """,
+                # Index for namespace
+                """
+                CREATE INDEX project_namespace_index IF NOT EXISTS
+                FOR (f:CodeFile) ON (f.project_name, f.namespace)
+                """,
+            ])
 
         for query in queries:
             try:
@@ -720,7 +757,7 @@ class Neo4jRAG:
 
                 line_count = len(code_file.content.splitlines()) if code_file.content else 0
 
-                file_data.append({
+                file_item = {
                     "project_name": self.project_name,
                     "path": str(code_file.path),
                     "language": code_file.language,
@@ -728,7 +765,20 @@ class Neo4jRAG:
                     "lines": line_count,
                     "last_modified": code_file.last_modified.isoformat(),
                     "hash": code_file.file_hash,
-                })
+                }
+
+                # Add classification fields if enabled
+                if self.enable_file_classification:
+                    file_item.update({
+                        "is_test": code_file.is_test,
+                        "is_config": code_file.is_config,
+                        "is_resource": code_file.is_resource,
+                        "is_documentation": code_file.is_documentation,
+                        "file_category": code_file.file_category,
+                        "namespace": code_file.namespace,
+                    })
+
+                file_data.append(file_item)
 
                 # Create chunks for this file
                 chunks = self.chunk_content(code_file.content, self.chunk_size, self.chunk_overlap)
@@ -766,15 +816,32 @@ class Neo4jRAG:
                     current_line = start_line + (self.chunk_size - self.chunk_overlap) - 1
 
             # Batch upsert files
-            file_upsert_query = """
-            UNWIND $files as file
-            MERGE (f:CodeFile {project_name: file.project_name, path: file.path})
-            SET f.language = file.language,
-                f.size = file.size,
-                f.lines = file.lines,
-                f.last_modified = file.last_modified,
-                f.hash = file.hash
-            """
+            if self.enable_file_classification:
+                file_upsert_query = """
+                UNWIND $files as file
+                MERGE (f:CodeFile {project_name: file.project_name, path: file.path})
+                SET f.language = file.language,
+                    f.size = file.size,
+                    f.lines = file.lines,
+                    f.last_modified = file.last_modified,
+                    f.hash = file.hash,
+                    f.is_test = file.is_test,
+                    f.is_config = file.is_config,
+                    f.is_resource = file.is_resource,
+                    f.is_documentation = file.is_documentation,
+                    f.file_category = file.file_category,
+                    f.namespace = file.namespace
+                """
+            else:
+                file_upsert_query = """
+                UNWIND $files as file
+                MERGE (f:CodeFile {project_name: file.project_name, path: file.path})
+                SET f.language = file.language,
+                    f.size = file.size,
+                    f.lines = file.lines,
+                    f.last_modified = file.last_modified,
+                    f.hash = file.hash
+                """
 
             await self.neo4j_driver.execute_query(
                 file_upsert_query,
@@ -845,27 +912,58 @@ class Neo4jRAG:
 
         # Create or update file node with project context
         line_count = len(code_file.content.splitlines()) if code_file.content else 0
-        file_query = """
-        MERGE (f:CodeFile {project_name: $project_name, path: $path})
-        SET f.language = $language,
-            f.size = $size,
-            f.lines = $lines,
-            f.last_modified = $last_modified,
-            f.hash = $hash
-        RETURN f
-        """
+
+        if self.enable_file_classification:
+            file_query = """
+            MERGE (f:CodeFile {project_name: $project_name, path: $path})
+            SET f.language = $language,
+                f.size = $size,
+                f.lines = $lines,
+                f.last_modified = $last_modified,
+                f.hash = $hash,
+                f.is_test = $is_test,
+                f.is_config = $is_config,
+                f.is_resource = $is_resource,
+                f.is_documentation = $is_documentation,
+                f.file_category = $file_category,
+                f.namespace = $namespace
+            RETURN f
+            """
+        else:
+            file_query = """
+            MERGE (f:CodeFile {project_name: $project_name, path: $path})
+            SET f.language = $language,
+                f.size = $size,
+                f.lines = $lines,
+                f.last_modified = $last_modified,
+                f.hash = $hash
+            RETURN f
+            """
+
+        query_params = {
+            "project_name": self.project_name,
+            "path": str(code_file.path),
+            "language": code_file.language,
+            "size": code_file.size,
+            "lines": line_count,
+            "last_modified": code_file.last_modified.isoformat(),
+            "hash": code_file.file_hash,
+        }
+
+        # Add classification fields if enabled
+        if self.enable_file_classification:
+            query_params.update({
+                "is_test": code_file.is_test,
+                "is_config": code_file.is_config,
+                "is_resource": code_file.is_resource,
+                "is_documentation": code_file.is_documentation,
+                "file_category": code_file.file_category,
+                "namespace": code_file.namespace,
+            })
 
         await self.neo4j_driver.execute_query(
             file_query,
-            {
-                "project_name": self.project_name,
-                "path": str(code_file.path),
-                "language": code_file.language,
-                "size": code_file.size,
-                "lines": line_count,
-                "last_modified": code_file.last_modified.isoformat(),
-                "hash": code_file.file_hash,
-            },
+            query_params,
             routing_control=RoutingControl.WRITE,
         )
 
@@ -1001,6 +1099,11 @@ class Neo4jRAG:
         query: str,
         limit: int = 10,
         language: str | None = None,
+        file_category: str | None = None,
+        is_test: bool | None = None,
+        is_config: bool | None = None,
+        is_documentation: bool | None = None,
+        is_resource: bool | None = None,
     ) -> list[SearchResult]:
         """
         Perform semantic search using embeddings with project context.
@@ -1009,6 +1112,11 @@ class Neo4jRAG:
             query: Search query
             limit: Maximum number of results
             language: Filter by programming language
+            file_category: Filter by file category (test/config/resource/documentation/source)
+            is_test: Filter to show only test files (or non-test if False)
+            is_config: Filter to show only config files (or non-config if False)
+            is_documentation: Filter to show only documentation files (or non-documentation if False)
+            is_resource: Filter to show only resource files (or non-resource if False)
 
         Returns:
             List of search results
@@ -1032,6 +1140,19 @@ class Neo4jRAG:
             if language:
                 cypher += " AND f.language = $language"
 
+            # Add file classification filters if enabled
+            if self.enable_file_classification:
+                if file_category:
+                    cypher += " AND f.file_category = $file_category"
+                if is_test is not None:
+                    cypher += " AND f.is_test = $is_test"
+                if is_config is not None:
+                    cypher += " AND f.is_config = $is_config"
+                if is_documentation is not None:
+                    cypher += " AND f.is_documentation = $is_documentation"
+                if is_resource is not None:
+                    cypher += " AND f.is_resource = $is_resource"
+
             cypher += """
             RETURN f.path as file_path,
                    c.content as chunk_content,
@@ -1049,6 +1170,19 @@ class Neo4jRAG:
             if language:
                 params["language"] = language
 
+            # Add classification parameters if enabled
+            if self.enable_file_classification:
+                if file_category:
+                    params["file_category"] = file_category
+                if is_test is not None:
+                    params["is_test"] = is_test
+                if is_config is not None:
+                    params["is_config"] = is_config
+                if is_documentation is not None:
+                    params["is_documentation"] = is_documentation
+                if is_resource is not None:
+                    params["is_resource"] = is_resource
+
             result = await self.neo4j_driver.execute_query(
                 cypher, params, routing_control=RoutingControl.READ
             )
@@ -1064,6 +1198,19 @@ class Neo4jRAG:
 
             if language:
                 cypher += " AND f.language = $language"
+
+            # Add file classification filters if enabled
+            if self.enable_file_classification:
+                if file_category:
+                    cypher += " AND f.file_category = $file_category"
+                if is_test is not None:
+                    cypher += " AND f.is_test = $is_test"
+                if is_config is not None:
+                    cypher += " AND f.is_config = $is_config"
+                if is_documentation is not None:
+                    cypher += " AND f.is_documentation = $is_documentation"
+                if is_resource is not None:
+                    cypher += " AND f.is_resource = $is_resource"
 
             # Manual cosine similarity calculation
             cypher += """
@@ -1096,6 +1243,19 @@ class Neo4jRAG:
             if language:
                 params["language"] = language
 
+            # Add classification parameters if enabled
+            if self.enable_file_classification:
+                if file_category:
+                    params["file_category"] = file_category
+                if is_test is not None:
+                    params["is_test"] = is_test
+                if is_config is not None:
+                    params["is_config"] = is_config
+                if is_documentation is not None:
+                    params["is_documentation"] = is_documentation
+                if is_resource is not None:
+                    params["is_resource"] = is_resource
+
             result = await self.neo4j_driver.execute_query(
                 cypher, params, routing_control=RoutingControl.READ
             )
@@ -1120,6 +1280,11 @@ class Neo4jRAG:
         is_regex: bool = False,
         limit: int = 10,
         language: str | None = None,
+        file_category: str | None = None,
+        is_test: bool | None = None,
+        is_config: bool | None = None,
+        is_documentation: bool | None = None,
+        is_resource: bool | None = None,
     ) -> list[SearchResult]:
         """
         Search for code by pattern (literal phrase via Lucene) or by regex (Cypher =~).
@@ -1129,6 +1294,11 @@ class Neo4jRAG:
             is_regex: Whether pattern is a regex
             limit: Maximum number of results
             language: Filter by programming language
+            file_category: Filter by file category (test/config/resource/documentation/source)
+            is_test: Filter to show only test files (or non-test if False)
+            is_config: Filter to show only config files (or non-config if False)
+            is_documentation: Filter to show only documentation files (or non-documentation if False)
+            is_resource: Filter to show only resource files (or non-resource if False)
 
         Returns:
             List of search results
@@ -1141,6 +1311,19 @@ class Neo4jRAG:
             """
             if language:
                 query += " AND f.language = $language"
+
+            # Add file classification filters if enabled
+            if self.enable_file_classification:
+                if file_category:
+                    query += " AND f.file_category = $file_category"
+                if is_test is not None:
+                    query += " AND f.is_test = $is_test"
+                if is_config is not None:
+                    query += " AND f.is_config = $is_config"
+                if is_documentation is not None:
+                    query += " AND f.is_documentation = $is_documentation"
+                if is_resource is not None:
+                    query += " AND f.is_resource = $is_resource"
 
             query += """
             RETURN f.path as file_path,
@@ -1167,6 +1350,19 @@ class Neo4jRAG:
             if language:
                 query += " AND f.language = $language"
 
+            # Add file classification filters if enabled
+            if self.enable_file_classification:
+                if file_category:
+                    query += " AND f.file_category = $file_category"
+                if is_test is not None:
+                    query += " AND f.is_test = $is_test"
+                if is_config is not None:
+                    query += " AND f.is_config = $is_config"
+                if is_documentation is not None:
+                    query += " AND f.is_documentation = $is_documentation"
+                if is_resource is not None:
+                    query += " AND f.is_resource = $is_resource"
+
             query += """
             RETURN f.path as file_path,
                    c.content as content,
@@ -1186,6 +1382,19 @@ class Neo4jRAG:
         if language:
             params["language"] = language
 
+        # Add classification parameters if enabled
+        if self.enable_file_classification:
+            if file_category:
+                params["file_category"] = file_category
+            if is_test is not None:
+                params["is_test"] = is_test
+            if is_config is not None:
+                params["is_config"] = is_config
+            if is_documentation is not None:
+                params["is_documentation"] = is_documentation
+            if is_resource is not None:
+                params["is_resource"] = is_resource
+
         result = await self.neo4j_driver.execute_query(
             query,
             params,
@@ -1204,6 +1413,102 @@ class Neo4jRAG:
                 )
             )
         return out
+
+    async def list_files_by_category(
+        self,
+        category: str | None = None,
+        is_test: bool | None = None,
+        is_config: bool | None = None,
+        is_documentation: bool | None = None,
+        is_resource: bool | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        List files in the project filtered by category or classification flags.
+        
+        Args:
+            category: Filter by file category (test/config/resource/documentation/source)
+            is_test: Filter to show only test files (or non-test if False)
+            is_config: Filter to show only config files (or non-config if False)
+            is_documentation: Filter to show only documentation files (or non-documentation if False)
+            is_resource: Filter to show only resource files (or non-resource if False)
+            limit: Maximum number of files to return
+            
+        Returns:
+            List of file metadata dictionaries
+        """
+        if not self.enable_file_classification:
+            logger.warning("File classification is disabled. Enable it to use category filters.")
+            return []
+
+        query = """
+        MATCH (f:CodeFile)
+        WHERE f.project_name = $project_name
+        """
+
+        if category:
+            query += " AND f.file_category = $category"
+        if is_test is not None:
+            query += " AND f.is_test = $is_test"
+        if is_config is not None:
+            query += " AND f.is_config = $is_config"
+        if is_documentation is not None:
+            query += " AND f.is_documentation = $is_documentation"
+        if is_resource is not None:
+            query += " AND f.is_resource = $is_resource"
+
+        query += """
+        RETURN f.path as path,
+               f.language as language,
+               f.size as size,
+               f.lines as lines,
+               f.file_category as category,
+               f.is_test as is_test,
+               f.is_config as is_config,
+               f.is_documentation as is_documentation,
+               f.is_resource as is_resource,
+               f.namespace as namespace
+        LIMIT $limit
+        """
+
+        params = {
+            "project_name": self.project_name,
+            "limit": limit,
+        }
+
+        if category:
+            params["category"] = category
+        if is_test is not None:
+            params["is_test"] = is_test
+        if is_config is not None:
+            params["is_config"] = is_config
+        if is_documentation is not None:
+            params["is_documentation"] = is_documentation
+        if is_resource is not None:
+            params["is_resource"] = is_resource
+
+        result = await self.neo4j_driver.execute_query(
+            query,
+            params,
+            routing_control=RoutingControl.READ,
+        )
+
+        files = []
+        for record in result.records:
+            files.append({
+                "path": record["path"],
+                "language": record["language"],
+                "size": record["size"],
+                "lines": record["lines"],
+                "category": record["category"],
+                "is_test": record["is_test"],
+                "is_config": record["is_config"],
+                "is_documentation": record["is_documentation"],
+                "is_resource": record["is_resource"],
+                "namespace": record["namespace"],
+            })
+
+        return files
 
     async def get_file_metadata(self, file_path: Path) -> dict[str, Any] | None:
         """

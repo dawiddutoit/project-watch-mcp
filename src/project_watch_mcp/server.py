@@ -691,11 +691,26 @@ Languages:
             if not file_info:
                 raise ToolError(f"File {file_path} not found")
 
-            # Update in Neo4j (not refresh_file which doesn't exist)
+            # Convert FileInfo to CodeFile for Neo4j update
             import time
+            from .neo4j_rag import CodeFile
+
+            # Read file content
+            with open(file_info.path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Create CodeFile object from FileInfo
+            code_file = CodeFile(
+                project_name=neo4j_rag.project_name,
+                path=file_info.path,
+                content=content,
+                language=file_info.language or "unknown",
+                size=file_info.size,
+                last_modified=file_info.last_modified
+            )
 
             start = time.time()
-            result = await neo4j_rag.update_file(file_info)
+            result = await neo4j_rag.update_file(code_file)
             elapsed_ms = int((time.time() - start) * 1000)
 
             # Ensure result has the expected structure

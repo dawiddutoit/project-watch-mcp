@@ -171,6 +171,22 @@ export LANGUAGE_DETECTION_CACHE_TTL=3600
 export LANGUAGE_CONFIDENCE_THRESHOLD=0.85
 ```
 
+#### File Classification
+Configure automatic file type classification:
+
+```bash
+# Enable/disable file classification (default: enabled)
+export ENABLE_FILE_CLASSIFICATION=true
+
+# Classification improves search performance by allowing filtering
+# Files are automatically classified as:
+# - test: Test files (test_*.py, *.test.js, spec.*, etc.)
+# - config: Configuration files (*.yaml, *.json, *.toml, etc.)
+# - documentation: Documentation files (*.md, *.rst, README, etc.)
+# - resource: Resource files (*.sql, *.csv, *.xml, etc.)
+# - source: Regular source code files
+```
+
 #### Complexity Analysis
 Configure complexity thresholds and analysis behavior:
 
