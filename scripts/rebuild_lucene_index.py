@@ -45,10 +45,16 @@ async def drop_and_rebuild_index(driver):
     logger.info("Step 2: Creating new fulltext index...")
     
     try:
-        # Create new fulltext index
+        # Create new fulltext index with proper configuration
         create_query = """
         CREATE FULLTEXT INDEX code_search IF NOT EXISTS
         FOR (c:CodeChunk) ON EACH [c.content]
+        OPTIONS {
+            indexConfig: {
+                `fulltext.analyzer`: 'standard-no-stop-words',
+                `fulltext.eventually_consistent`: true
+            }
+        }
         """
         await driver.execute_query(create_query, routing_control=RoutingControl.WRITE)
         logger.info("Created new code_search fulltext index")

@@ -35,6 +35,7 @@ env/
 .DS_Store
 
 # Testing
+coverage.json
 .coverage
 .pytest_cache/
 htmlcov/

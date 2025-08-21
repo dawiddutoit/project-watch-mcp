@@ -54,8 +54,8 @@ async def fix_lucene_index():
         FOR (c:CodeChunk) ON EACH [c.content]
         OPTIONS {
             indexConfig: {
-                `fulltext.analyzer`: 'keyword',
-                `fulltext.eventually_consistent`: false
+                `fulltext.analyzer`: 'standard-no-stop-words',
+                `fulltext.eventually_consistent`: true
             }
         }
         """
@@ -79,27 +79,64 @@ async def fix_lucene_index():
         
         print(f"   📊 Found {chunk_count} chunks to re-index")
         
-        # Step 5: Check for oversized chunks that might break the index again
-        print("\n5️⃣ Checking for oversized chunks...")
+        # Step 5: Fix oversized chunks that will break the index
+        print("\n5️⃣ Checking and fixing oversized chunks...")
         oversized_query = """
         MATCH (c:CodeChunk)
         WHERE size(c.content) > 30000
         RETURN c.file_path as file_path, 
                c.chunk_index as chunk_index,
-               size(c.content) as content_size
+               size(c.content) as content_size,
+               id(c) as node_id
         ORDER BY content_size DESC
-        LIMIT 10
         """
         
         oversized_result = await driver.execute_query(oversized_query)
         
         if oversized_result.records:
-            print("   ⚠️  WARNING: Found oversized chunks that may cause issues:")
-            for record in oversized_result.records:
+            print(f"   ⚠️  Found {len(oversized_result.records)} oversized chunks")
+            
+            # Show the worst offenders
+            for record in oversized_result.records[:5]:
                 print(f"      - {record['file_path']} (chunk {record['chunk_index']}): {record['content_size']} chars")
             
-            print("\n   🔴 CRITICAL: These chunks exceed safe limits!")
-            print("   💡 Recommendation: Re-initialize the repository to properly chunk these files")
+            # Ask user what to do
+            print("\n   🔴 CRITICAL: These chunks will break the Lucene index!")
+            print("   Options:")
+            print("   1. Delete oversized chunks (recommended)")
+            print("   2. Truncate to 30KB limit")
+            print("   3. Skip and try anyway (will likely fail)")
+            
+            choice = input("\n   Enter choice (1/2/3) [1]: ").strip() or "1"
+            
+            if choice == "1":
+                print("   🗑️  Deleting oversized chunks...")
+                delete_result = await driver.execute_query("""
+                    MATCH (c:CodeChunk)
+                    WHERE size(c.content) > 30000
+                    WITH c, c.file_path as file_path
+                    DETACH DELETE c
+                    RETURN count(c) as deleted_count, collect(DISTINCT file_path) as affected_files
+                """)
+                if delete_result.records:
+                    record = delete_result.records[0]
+                    print(f"   ✅ Deleted {record['deleted_count']} oversized chunks")
+                    print(f"   📝 Affected files: {', '.join(record['affected_files'][:5])}...")
+                    print("   💡 Run 'mcp__project-watch-mcp__initialize_repository' to re-index these files")
+            
+            elif choice == "2":
+                print("   ✂️  Truncating oversized chunks to 30KB...")
+                truncate_result = await driver.execute_query("""
+                    MATCH (c:CodeChunk)
+                    WHERE size(c.content) > 30000
+                    SET c.content = substring(c.content, 0, 30000) + '\n... [TRUNCATED - content too large for index]'
+                    RETURN count(c) as truncated_count
+                """)
+                if truncate_result.records:
+                    print(f"   ✅ Truncated {truncate_result.records[0]['truncated_count']} chunks")
+            
+            else:
+                print("   ⚠️  Skipping fix - index creation may fail!")
         else:
             print("   ✅ No oversized chunks detected")
         

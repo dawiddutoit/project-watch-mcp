@@ -230,8 +230,9 @@ class RepositoryMonitor:
             "dist",
             "*.egg-info",
             # Lock files and large generated files
-            "*.lock",
+            "*-lock.lock",
             "package-lock.json",
+            "*.lock",
             "yarn.lock",
             "poetry.lock",
             "Pipfile.lock",
@@ -241,12 +242,13 @@ class RepositoryMonitor:
         # Load gitignore patterns if available
         self.gitignore_spec = self._load_gitignore() if use_gitignore else None
 
-        # Combine user-provided patterns with defaults if no gitignore
-        if not self.gitignore_spec:
-            self.ignore_patterns = ignore_patterns or default_ignore_patterns
-        else:
-            # If gitignore is loaded, only use additional user patterns
-            self.ignore_patterns = ignore_patterns or []
+        # Always include default ignore patterns for lock files and other generated files
+        # These are critical patterns that should always be excluded
+        # Combine with user-provided patterns if any, ensuring uniqueness
+        combined_patterns = set(default_ignore_patterns)
+        if ignore_patterns:
+            combined_patterns.update(ignore_patterns)
+        self.ignore_patterns = list(combined_patterns)
 
         self.is_running = False
         self._watch_task: asyncio.Task | None = None
@@ -309,8 +311,12 @@ class RepositoryMonitor:
         # Check additional ignore patterns
         for pattern in self.ignore_patterns:
             if fnmatch.fnmatch(file_path.name, pattern):
+                if file_path.name == "uv.lock":
+                    logger.debug(f"Excluding {file_path.name} due to pattern: {pattern}")
                 return False
             if any(fnmatch.fnmatch(part, pattern) for part in file_path.parts):
+                if file_path.name == "uv.lock":
+                    logger.debug(f"Excluding {file_path.name} due to path part pattern: {pattern}")
                 return False
 
         # Check include patterns

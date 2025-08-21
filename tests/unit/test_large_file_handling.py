@@ -232,8 +232,8 @@ class TestRepositoryMonitorPatterns:
         assert "poetry.lock" in ignore_patterns
         assert "Pipfile.lock" in ignore_patterns
     
-    def test_custom_ignore_patterns_override(self):
-        """Test that custom ignore patterns can be provided."""
+    def test_custom_ignore_patterns_additive(self):
+        """Test that custom ignore patterns are additive with defaults."""
         mock_driver = MagicMock(spec=AsyncDriver)
         
         custom_patterns = ["*.custom", "special.file"]
@@ -245,10 +245,14 @@ class TestRepositoryMonitorPatterns:
             use_gitignore=False
         )
         
-        # When gitignore is not used and custom patterns are provided,
-        # only custom patterns should be used
-        assert monitor.ignore_patterns == custom_patterns
+        # Custom patterns should be combined with defaults
+        # Defaults always include lock files for safety
+        assert "*.custom" in monitor.ignore_patterns
+        assert "special.file" in monitor.ignore_patterns
+        assert "*.lock" in monitor.ignore_patterns  # Default pattern
+        assert "uv.lock" in monitor.ignore_patterns  # Default pattern
         
-        # Test that custom patterns work
+        # Test that both custom and default patterns work
         assert not monitor._should_include_file(Path("/test/repo/file.custom"))
         assert not monitor._should_include_file(Path("/test/repo/special.file"))
+        assert not monitor._should_include_file(Path("/test/repo/uv.lock"))  # Default exclusion

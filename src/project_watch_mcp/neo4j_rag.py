@@ -365,14 +365,15 @@ class Neo4jRAG:
             CREATE INDEX chunk_project_index IF NOT EXISTS
             FOR (c:CodeChunk) ON (c.project_name)
             """,
-            # Create fulltext index for code search with code-friendly analyzer
+            # Create fulltext index for code search with standard analyzer
+            # Using standard-no-stop-words to handle large content better
             """
             CREATE FULLTEXT INDEX code_search IF NOT EXISTS
             FOR (c:CodeChunk) ON EACH [c.content]
             OPTIONS {
                 indexConfig: {
-                    `fulltext.analyzer`: 'keyword',
-                    `fulltext.eventually_consistent`: false
+                    `fulltext.analyzer`: 'standard-no-stop-words',
+                    `fulltext.eventually_consistent`: true
                 }
             }
             """,

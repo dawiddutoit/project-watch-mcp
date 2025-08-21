@@ -63,6 +63,7 @@ dev-dependencies = [
     "pytest-xdist>=3.8.0",
     "pytest-mock>=3.14.1",
     "freezegun>=1.5.5",
+    "testcontainers-neo4j>=0.0.1rc1",
 ]
 
 [project.scripts]
